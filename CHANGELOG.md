@@ -10,6 +10,10 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Faster scrolling, no late stalls
 
+- A partial frame draws stage 1's boxes in one render pass for each of its two images (was a pair of passes for
+  each box: the M1 Lab's median frame opened 8, each loading and storing both images whole on a tile-based GPU).
+  `Cost::passes` counts them.
+
 - `FramePath::shade_why`: the three reasons whose boxes cover most of a partial frame's shaded pixels, each as a
   share of the window, shown after the share in `FramePath::line` (`shade 54% (stage moved 43%, changed 12%, band 6%)`).
 

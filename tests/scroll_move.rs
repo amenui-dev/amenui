@@ -58,6 +58,8 @@ fn a_slow_scroll_shades_only_the_band_it_brings_in_and_draws_the_frame_drawn_who
                 if c.moved == 0 { continue; }
                 moved += 1;
                 assert!((path.shade - c.material as f32 / (w * h) as f32).abs() < 1e-3, "{mat:?} frame {f}: the readout's shade share: {}", path.line());
+                // Stage 1's boxes share one pass for each image.
+                assert_eq!(c.passes, 2, "{mat:?} frame {f}: stage 1 opened {} passes", c.passes);
                 // What put the boxes there: the band scrolled in among the three largest, none above the share.
                 assert!(path.shade_why.iter().any(|w| w.0 == "band" && w.1 > 0.0), "{mat:?} frame {f}: the band is a reason: {}", path.line());
                 assert!(path.shade_why.windows(2).all(|p| p[0].1 >= p[1].1) && path.line().contains("% (") , "{mat:?} frame {f}: {}", path.line());

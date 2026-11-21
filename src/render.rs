@@ -403,7 +403,7 @@ pub struct Renderer {
 /// of stage 1's boxes, the pixels the images were moved by a scroll (`dirty::Move`, per image), and
 /// the bytes uploaded to textures.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Cost { pub material: u64, pub stage1: u64, pub moved: u64, pub upload: u64, /** The viewport a scroll move with its trace showing tested pixel by pixel for the trace (most of it kept). */ pub trace: u64 }
+pub struct Cost { pub material: u64, pub stage1: u64, pub moved: u64, pub upload: u64, /** The viewport a scroll move with its trace showing tested pixel by pixel for the trace (most of it kept). */ pub trace: u64, /** The render passes stage 1 opened on the ink and near images. */ pub passes: u32 }
 
 /// The mesh pass's uniforms (see `mesh.wgsl`).
 #[repr(C)]
@@ -1342,7 +1342,7 @@ impl Renderer {
                     self.upload(&sc);
                     let mut enc = self.device.create_command_encoder(&Default::default());
                     self.prepare_meshes(&mut enc, &sc, ui.meshes(), look.marks);
-                    self.stage1(&mut enc, &sc, &iv, &nv, 0, None);
+                    let _ = self.stage1(&mut enc, &sc, &iv, &nv, 0, &[None]);
                     self.queue.submit([enc.finish()]);
                 }
             }
@@ -1762,123 +1762,147 @@ impl Renderer {
             }
         }
     }
-    fn stage1(&self, enc: &mut wgpu::CommandEncoder, scene: &Scene, ink: &wgpu::TextureView, near: &wgpu::TextureView, tiles: u32, scissor: Option<[u32; 4]>) {
+    /// Stage 1 into the ink and near images: whole (`[None]`), or again only within each box (x, y, w, h
+    /// device px), the rest of the images kept. Boxes share one pass for each image unless something in
+    /// the frame needs passes of its own (a morph's tiles, an opacity group, a plate inked as it adds).
+    fn stage1(&self, enc: &mut wgpu::CommandEncoder, scene: &Scene, ink: &wgpu::TextureView, near: &wgpu::TextureView, tiles: u32, scissors: &[Option<[u32; 4]>]) -> u32 {
+        let mut passes = 0u32;
         let layer = scene.layer.unwrap_or(u32::MAX);
+        let adding = scene.plates.iter().any(|p| self.plates[p.slot as usize].is_some() && self.plate_inked[p.slot as usize] && self.plate_fresh[p.slot as usize] && !p.replace);
         for (k, (view, pipe, top)) in [(ink, &self.pipes[0], &self.pipes[5]), (near, &self.pipes[1], &self.pipes[2])].into_iter().enumerate() {
-            let mut pass = self.open(enc, view, scissor);
-            let mut pending = tiles > 0;
-            let draw_tiles = |pass: &mut wgpu::RenderPass<'_>| {
-                if let Some((group, n)) = &self.tiles.grid_now {
-                    // The GPU path: tile `i` is instance `i`, its place read from the state texture.
-                    pass.set_pipeline(&self.tiles.gpipes.as_ref().expect("made before a morph is drawn")[k]);
-                    pass.set_bind_group(0, group, &[]);
-                    pass.draw(0..4, 0..*n);
-                    return;
-                }
-                pass.set_pipeline(&self.tiles.pipes.as_ref().expect("made before a morph is drawn")[k]);
-                pass.set_bind_group(0, &self.tiles.group, &[]);
-                pass.set_vertex_buffer(0, self.tiles.buf.slice(..));
-                pass.draw(0..4, 0..tiles);
-                pass.set_vertex_buffer(0, self.instances.slice(..));
-            };
-            pass.set_vertex_buffer(0, self.instances.slice(..));
-            // In the ink, a see-through group is drawn into an image of its own and laid on as one
-            // (`El::opacity`); the near image takes its instances as they are.
             let groups: &[crate::scene::Group] = if k == 0 && self.group.is_some() { &scene.groups } else { &[] };
-            let draw = |pass: &mut wgpu::RenderPass<'_>, from: u32, to: u32| {
-                for b in &scene.batches {
-                    let (s0, s1) = (b.start.max(from), b.end.min(to));
-                    if s0 >= s1 { continue; }
-                    pass.set_pipeline(if b.start >= layer { top } else { pipe });
-                    let Some(group) = self.batch_group(b.picture) else { continue };
-                    pass.set_bind_group(0, group, &[]);
-                    pass.draw(0..4, s0..s1);
-                }
-            };
-            let end = scene.instances.len() as u32;
-            // The tiles of a morph go in where the layer starts.
-            let mut at = 0u32;
-            let mut stops: Vec<u32> = groups.iter().flat_map(|g| [g.start, g.end]).chain(scene.plates.iter().filter(|p| self.plates[p.slot as usize].is_some()).flat_map(|p| [p.start, p.end])).collect();
-            if pending && layer < end { stops.push(layer); }
-            // One past the end: a plate starting at the end (empty) is still laid on.
-            stops.push(end + 1);
-            stops.sort_unstable();
-            let mut kept = scene.plates.iter().filter(|p| self.plates[p.slot as usize].is_some()).peekable();
-            for stop in stops {
-                if stop <= at { if pending && stop == layer && at == layer { draw_tiles(&mut pass); pending = false; } continue; }
-                // Plates in order; several may start at once (empty ones among them).
-                while let Some(p) = kept.next_if(|p| p.start == at) {
-                    // A plate that has never held ink (nothing drawn since it was made or cleared) is not
-                    // laid on: the page costs and looks as one without it.
-                    if !self.plate_inked[p.slot as usize] { continue; }
-                    if k == 0 { self.plates_laid.set(self.plates_laid.get() + 1); }
-                    // A plate (DESIGN.md §1.33): this frame's ink goes into its kept images (and when it
-                    // was drawn, into its age), then what they hold is laid on, aged, in its place.
-                    let pt = self.plates[p.slot as usize].as_ref().expect("checked");
-                    drop(pass);
-                    // Inked once: a scene drawn again lays on what its plate holds. One whose instances
-                    // replace what it holds is inked before stage 1 (`Renderer::plates_ink`).
-                    let adds = self.plate_fresh[p.slot as usize] && !p.replace;
-                    if adds {
-                        let mut pp = load(enc, if k == 0 { &pt.ink } else { &pt.near });
-                        if let Some([x, y, w, h]) = scissor { pp.set_scissor_rect(x, y, w, h); }
-                        pp.set_vertex_buffer(0, self.instances.slice(..));
-                        draw(&mut pp, p.start, p.end);
+            let one = tiles == 0 && groups.is_empty() && !adding;
+            let runs: Vec<&[Option<[u32; 4]>]> = if one { vec![scissors] } else { scissors.chunks(1).collect() };
+            for run in runs {
+                let Some(&first) = run.first() else { continue };
+                let mut pass = self.open(enc, view, first);
+                passes += 1;
+                pass.set_vertex_buffer(0, self.instances.slice(..));
+                for (n, &scissor) in run.iter().enumerate() {
+                    if n > 0 && let Some([x, y, w, h]) = scissor {
+                        pass.set_scissor_rect(x, y, w, h);
+                        pass.set_pipeline(&self.zero[0]);
+                        pass.set_bind_group(0, self.pictures.get(&u32::MAX).expect("blank picture"), &[]);
+                        pass.draw(0..3, 0..1);
                     }
-                    // When each pixel was drawn: where the ink is, and where its nearness reaches.
-                    for (target, pipe) in [(&pt.age, &self.plate_pipes[0]), (&pt.near_age, &self.plate_pipes[3])].into_iter().take(if k == 0 && adds { 2 } else { 0 }) {
-                        let mut ap = load(enc, target);
-                        if let Some([x, y, w, h]) = scissor { ap.set_scissor_rect(x, y, w, h); }
-                        ap.set_vertex_buffer(0, self.instances.slice(..));
-                        for b in &scene.batches {
-                            let (s0, s1) = (b.start.max(p.start), b.end.min(p.end));
-                            if s0 >= s1 { continue; }
-                            let Some(group) = self.batch_group(b.picture) else { continue };
-                            ap.set_pipeline(pipe);
-                            ap.set_bind_group(0, group, &[]);
-                            ap.draw(0..4, s0..s1);
+                    let mut pending = tiles > 0;
+                    let draw_tiles = |pass: &mut wgpu::RenderPass<'_>| {
+                        if let Some((group, n)) = &self.tiles.grid_now {
+                            // The GPU path: tile `i` is instance `i`, its place read from the state texture.
+                            pass.set_pipeline(&self.tiles.gpipes.as_ref().expect("made before a morph is drawn")[k]);
+                            pass.set_bind_group(0, group, &[]);
+                            pass.draw(0..4, 0..*n);
+                            return;
                         }
-                    }
-                    pass = load(enc, view);
-                    if let Some([x, y, w, h]) = scissor { pass.set_scissor_rect(x, y, w, h); }
-                    pass.set_pipeline(&self.plate_pipes[1 + k]);
-                    pass.set_bind_group(0, &pt.bind, &[]);
-                    let v = p.slot as u32 * 3;
-                    pass.draw(v..v + 3, 0..1);
-                    pass.set_vertex_buffer(0, self.instances.slice(..));
-                    // The whole plate is drawn at once (a group in it goes in plainly); what follows it
-                    // up to this stop is drawn below.
-                    at = p.end;
-                    if pending && at == layer { draw_tiles(&mut pass); pending = false; }
-                }
-                if stop <= at { continue; }
-                match groups.iter().find(|g| g.start == at) {
-                    Some(g) => {
-                        let (gview, gbind) = self.group.as_ref().expect("made before the frame");
-                        drop(pass);
-                        {
-                            let mut gp = clear(enc, gview, wgpu::Color::TRANSPARENT);
-                            if let Some([x, y, w, h]) = scissor { gp.set_scissor_rect(x, y, w, h); }
-                            gp.set_vertex_buffer(0, self.instances.slice(..));
-                            draw(&mut gp, g.start, g.end.min(stop));
-                        }
-                        pass = load(enc, view);
-                        if let Some([x, y, w, h]) = scissor { pass.set_scissor_rect(x, y, w, h); }
-                        // The group's pixels times its opacity (passed in the vertex numbers, in thousandths:
-                        // WebGL2 has no first instance).
-                        pass.set_pipeline(&self.group_pipe);
-                        pass.set_bind_group(0, gbind, &[]);
-                        let o = (g.opacity.clamp(0.0, 1.0) * 1000.0).round() as u32;
-                        pass.draw(o * 3..o * 3 + 3, 0..1);
+                        pass.set_pipeline(&self.tiles.pipes.as_ref().expect("made before a morph is drawn")[k]);
+                        pass.set_bind_group(0, &self.tiles.group, &[]);
+                        pass.set_vertex_buffer(0, self.tiles.buf.slice(..));
+                        pass.draw(0..4, 0..tiles);
                         pass.set_vertex_buffer(0, self.instances.slice(..));
+                    };
+                    // In the ink, a see-through group is drawn into an image of its own and laid on as one
+                    // (`El::opacity`); the near image takes its instances as they are (`groups`, above).
+                    let draw = |pass: &mut wgpu::RenderPass<'_>, from: u32, to: u32| {
+                        for b in &scene.batches {
+                            let (s0, s1) = (b.start.max(from), b.end.min(to));
+                            if s0 >= s1 { continue; }
+                            pass.set_pipeline(if b.start >= layer { top } else { pipe });
+                            let Some(group) = self.batch_group(b.picture) else { continue };
+                            pass.set_bind_group(0, group, &[]);
+                            pass.draw(0..4, s0..s1);
+                        }
+                    };
+                    let end = scene.instances.len() as u32;
+                    // The tiles of a morph go in where the layer starts.
+                    let mut at = 0u32;
+                    let mut stops: Vec<u32> = groups.iter().flat_map(|g| [g.start, g.end]).chain(scene.plates.iter().filter(|p| self.plates[p.slot as usize].is_some()).flat_map(|p| [p.start, p.end])).collect();
+                    if pending && layer < end { stops.push(layer); }
+                    // One past the end: a plate starting at the end (empty) is still laid on.
+                    stops.push(end + 1);
+                    stops.sort_unstable();
+                    let mut kept = scene.plates.iter().filter(|p| self.plates[p.slot as usize].is_some()).peekable();
+                    for stop in stops {
+                        if stop <= at { if pending && stop == layer && at == layer { draw_tiles(&mut pass); pending = false; } continue; }
+                        // Plates in order; several may start at once (empty ones among them).
+                        while let Some(p) = kept.next_if(|p| p.start == at) {
+                            // A plate that has never held ink (nothing drawn since it was made or cleared) is not
+                            // laid on: the page costs and looks as one without it.
+                            if !self.plate_inked[p.slot as usize] { continue; }
+                            if k == 0 { self.plates_laid.set(self.plates_laid.get() + 1); }
+                            // A plate (DESIGN.md §1.33): this frame's ink goes into its kept images (and when it
+                            // was drawn, into its age), then what they hold is laid on, aged, in its place.
+                            let pt = self.plates[p.slot as usize].as_ref().expect("checked");
+                            // Inked once: a scene drawn again lays on what its plate holds. One whose instances
+                            // replace what it holds is inked before stage 1 (`Renderer::plates_ink`).
+                            let adds = self.plate_fresh[p.slot as usize] && !p.replace;
+                            if adds {
+                                drop(pass);
+                                {
+                                    let mut pp = load(enc, if k == 0 { &pt.ink } else { &pt.near });
+                                    if let Some([x, y, w, h]) = scissor { pp.set_scissor_rect(x, y, w, h); }
+                                    pp.set_vertex_buffer(0, self.instances.slice(..));
+                                    draw(&mut pp, p.start, p.end);
+                                }
+                                // When each pixel was drawn: where the ink is, and where its nearness reaches.
+                                for (target, pipe) in [(&pt.age, &self.plate_pipes[0]), (&pt.near_age, &self.plate_pipes[3])].into_iter().take(if k == 0 { 2 } else { 0 }) {
+                                    let mut ap = load(enc, target);
+                                    if let Some([x, y, w, h]) = scissor { ap.set_scissor_rect(x, y, w, h); }
+                                    ap.set_vertex_buffer(0, self.instances.slice(..));
+                                    for b in &scene.batches {
+                                        let (s0, s1) = (b.start.max(p.start), b.end.min(p.end));
+                                        if s0 >= s1 { continue; }
+                                        let Some(group) = self.batch_group(b.picture) else { continue };
+                                        ap.set_pipeline(pipe);
+                                        ap.set_bind_group(0, group, &[]);
+                                        ap.draw(0..4, s0..s1);
+                                    }
+                                }
+                                pass = load(enc, view);
+                                passes += 1;
+                                if let Some([x, y, w, h]) = scissor { pass.set_scissor_rect(x, y, w, h); }
+                            }
+                            pass.set_pipeline(&self.plate_pipes[1 + k]);
+                            pass.set_bind_group(0, &pt.bind, &[]);
+                            let v = p.slot as u32 * 3;
+                            pass.draw(v..v + 3, 0..1);
+                            pass.set_vertex_buffer(0, self.instances.slice(..));
+                            // The whole plate is drawn at once (a group in it goes in plainly); what follows it
+                            // up to this stop is drawn below.
+                            at = p.end;
+                            if pending && at == layer { draw_tiles(&mut pass); pending = false; }
+                        }
+                        if stop <= at { continue; }
+                        match groups.iter().find(|g| g.start == at) {
+                            Some(g) => {
+                                let (gview, gbind) = self.group.as_ref().expect("made before the frame");
+                                drop(pass);
+                                {
+                                    let mut gp = clear(enc, gview, wgpu::Color::TRANSPARENT);
+                                    if let Some([x, y, w, h]) = scissor { gp.set_scissor_rect(x, y, w, h); }
+                                    gp.set_vertex_buffer(0, self.instances.slice(..));
+                                    draw(&mut gp, g.start, g.end.min(stop));
+                                }
+                                pass = load(enc, view);
+                                passes += 1;
+                                if let Some([x, y, w, h]) = scissor { pass.set_scissor_rect(x, y, w, h); }
+                                // The group's pixels times its opacity (passed in the vertex numbers, in thousandths:
+                                // WebGL2 has no first instance).
+                                pass.set_pipeline(&self.group_pipe);
+                                pass.set_bind_group(0, gbind, &[]);
+                                let o = (g.opacity.clamp(0.0, 1.0) * 1000.0).round() as u32;
+                                pass.draw(o * 3..o * 3 + 3, 0..1);
+                                pass.set_vertex_buffer(0, self.instances.slice(..));
+                            }
+                            None => draw(&mut pass, at, stop),
+                        }
+                        at = stop;
+                        if pending && at == layer { draw_tiles(&mut pass); pending = false; }
                     }
-                    None => draw(&mut pass, at, stop),
+                    if pending { draw_tiles(&mut pass); }
                 }
-                at = stop;
-                if pending && at == layer { draw_tiles(&mut pass); pending = false; }
             }
-            if pending { draw_tiles(&mut pass); }
         }
+        passes
     }
 
     /// Both stages of one frame into `target`, submitted on its own so that each frame gets its own
@@ -1987,10 +2011,10 @@ impl Renderer {
             self.cost.material = s2 + lo.map_or(0, |q| (q[2] * q[3]) as u64);
             self.path.shade = (s2 as f64 / whole.max(1) as f64).min(1.0) as f32;
         }
-        match &boxes {
-            None => self.stage1(&mut enc, scene, &ink, &near, tiles, None),
-            Some((s1, _)) => for b in s1 { self.stage1(&mut enc, scene, &ink, &near, tiles, Some(*b)); },
-        }
+        self.cost.passes = match &boxes {
+            None => self.stage1(&mut enc, scene, &ink, &near, tiles, &[None]),
+            Some((s1, _)) => self.stage1(&mut enc, scene, &ink, &near, tiles, &s1.iter().map(|b| Some(*b)).collect::<Vec<_>>()),
+        };
         // A move with its trace showing: within the viewport, every pixel the trace can reach in either
         // frame is shaded again (the boxes after it draw theirs over it, with their marks).
         if let Some(m) = traced {

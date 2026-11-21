@@ -2139,7 +2139,10 @@ copied whole to the target each frame (the web swap chain gives a new image ever
   `dirty::MAX_SHADE_BOXES` (32) for the final frame, grown from what changed as it is, and from those down to
   `dirty::MAX_BOXES` (8) for the G-buffer, which draws every instance again in each box (the final boxes are
   one scissored triangle each). Each stage is drawn once per box (boxes may overlap: a pixel drawn twice is
-  drawn the same). `dirty::parts` gives them; `dirty::region` and the readout their union. Acceptance:
+  drawn the same), the G-buffer's boxes in one render pass for each image, each box scissored, cleared and
+  drawn in turn (a tile-based GPU loads and stores the whole image for every pass it opens), unless the frame
+  needs passes of its own (a morph's tiles, an opacity group, a plate that adds this frame's ink), which
+  open a pair of passes per box (`Cost::passes` counts them). `dirty::parts` gives them; `dirty::region` and the readout their union. Acceptance:
   `tests/dirty_parts.rs` (a drawing that gains strokes redraws only its own cell, two cells far apart are two
   boxes under a quarter of the window, seven frames of cells changing under three materials, drawn in their
   boxes, are byte for byte the frames drawn whole, and 16 motes drifting over a window-wide drawing are
