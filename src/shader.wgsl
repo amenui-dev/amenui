@@ -487,9 +487,19 @@ fn mesh_near(i: VOut) -> vec4f { return textureSampleLevel(tex0, samp, clamp(i.u
 /// 0.5 + hue / 4. At the silhouette's filtered edge an empty texel takes a drawn neighbour's colour.
 /// The outline's tone of the copies drawn nearest here (the resolve's alpha, unfiltered; just off the
 /// silhouette, a neighbour's); the ink where none is.
+/// The texel of a 3D element's target that stands for this pixel: from the pixel's whole position in
+/// the box (not the interpolated uv, which lands on a texel's edge at whole scales and rounds either
+/// way by the driver), the texel under its centre, `floor((k + ½) × dims ÷ size)`, exact in floats for a
+/// box of whole pixels at any scale whose target is that many times its size. At scale 2 a pixel covers
+/// its own 2 × 2 texels and stands for the lower right one. A turned element maps by its uv.
+fn mesh_texel(i: VOut, dims: vec2f) -> vec2i {
+  var t = floor(clamp(i.uv, vec2f(0.0), vec2f(1.0)) * dims);
+  if (all(i.xf == vec4f(0.0))) { t = floor((floor(i.pos.xy) - i.org + 0.5) * dims / i.size); }
+  return vec2i(clamp(t, vec2f(0.0), dims - 1.0));
+}
 fn mesh_outline(i: VOut) -> f32 {
   let dims = vec2f(textureDimensions(tex0));
-  let q = vec2i(clamp(floor(clamp(i.uv, vec2f(0.0), vec2f(1.0)) * dims), vec2f(0.0), dims - 1.0));
+  let q = mesh_texel(i, dims);
   let lim = vec2i(dims) - 1;
   var dirs = array<vec2i, 9>(vec2i(0, 0), vec2i(1, 0), vec2i(-1, 0), vec2i(0, 1), vec2i(0, -1), vec2i(1, 1), vec2i(-1, 1), vec2i(1, -1), vec2i(-1, -1));
   for (var k = 0; k < 9; k++) {
@@ -500,7 +510,7 @@ fn mesh_outline(i: VOut) -> f32 {
 }
 fn mesh_px(i: VOut) -> vec4f {
   let dims = vec2f(textureDimensions(tex1));
-  let q = vec2i(clamp(floor(clamp(i.uv, vec2f(0.0), vec2f(1.0)) * dims), vec2f(0.0), dims - 1.0));
+  let q = mesh_texel(i, dims);
   var c = textureLoad(tex1, q, 0);
   if (c.a < 0.25) {
     let lim = vec2i(dims) - 1;

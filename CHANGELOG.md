@@ -10,6 +10,9 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Faster scrolling, no late stalls
 
+- A 3D element supersampled at a whole scale (the card stack, at 2) reads each pixel's texel from the pixel's own
+  position, exactly: one driver lost the outline's top row and another its bottom.
+
 - A cached subtree (`El::cached`) in a scroll area moves with the scroll: the frame moves its plate as it moves
   the last frame and inks only the band scrolled into view and what changed in it (every scroll frame of the
   Lab's Loupe was drawn whole, "plate emptied"). Any change to a cached subtree now inks its plate only within

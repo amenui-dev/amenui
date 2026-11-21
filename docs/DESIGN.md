@@ -2039,7 +2039,13 @@ nearest under it, read unfiltered); flat-shading normals and shading are interpo
 fall on a pixel's share of them, so a turned edge is a smooth line: the card stack draws at 2), with 24-bit depth and three RGBA8 targets drawn at once
 (multiple render targets work on WebGL2 without blending): shading (ambient + Lambert, flat), tone, accent and
 hue; view-space normal xy and 16-bit linear depth; the instance index (+ 1, 16 bits) and normal z. Unchanged
-elements (same `Scene3d::fingerprint` and size) are not redrawn.
+elements (same `Scene3d::fingerprint` and size) are not redrawn. A pixel reads its colour and its outline's
+grey from the texel under its centre, found from its whole position in the box, `floor((k + ½) × dims ÷ size)`
+(not from interpolated coordinates, which at a whole scale land on a texel's edge and round either way by the
+driver: one renderer lost an outline's top row and another its bottom). For a box of whole pixels this is exact
+at every scale, so every driver draws the same pixels, and the element moved by whole pixels draws them again;
+at 2 a pixel covers its own 2 × 2 texels and stands for the lower right one (the nearness is filtered over them)
+(`tests/mesh_texel.rs`).
 
 **The resolve.** Three small full-screen passes: `mask` (covered pixels are silhouette; a covered pixel whose
 right or lower neighbour is a different instance, whose depth jumps more than `edge_depth` (relative depth,
