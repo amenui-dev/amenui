@@ -821,6 +821,11 @@ pub struct Ui<S, M> {
     clicks: (f32, f32, f32, u8),
     /// The accessibility mirror as last sent to the host, and the focus it was told.
     a11y_sent: HashMap<String, A11yNode>,
+    /// Layouts so far, and the count when the mirror was last sent; whether moves while a scroll goes on
+    /// are owed to it (`Ui::a11y_diff`).
+    layout_gen: u64,
+    a11y_gen: u64,
+    a11y_owed: bool,
     a11y_focus: Option<String>,
     // ── Incremental layout (DESIGN.md §1.13) ──
     /// The taffy tree, kept across layouts: each key's taffy node, and what its measured content was.
@@ -1239,7 +1244,7 @@ impl<S, M: Clone> Ui<S, M> {
             dirty: true, look_of: None, locale_of: None, timing: Timing::default(), wake_of: None, latest_birth: f32::NEG_INFINITY, gaze_until: f32::NEG_INFINITY,
             marks_moving: false, caret: None, caret_on: true, static_loose: false, mclock: 0.0, moving: false, gclock: 0.0, ground_moving: false,
             perf: crate::perf::Perf { quality: 1.0, ..Default::default() }, span: 0, painting: false, overlay: 0, overlay_at: 0.0, overlay_box: None, overlay_w: (0, (0.0, 0.0), 0.0), fade_s: REDUCED_FADE, came: vec![], arriving: HashMap::default(), sweeping: false, swept_nodes: vec![], remeasure: false, plate_slots: Default::default(), plate_sig: Default::default(), plate_keep: Default::default(), faces_added: 0, plate_clear: vec![], plate_over: vec![], pclock: 0.0, plate_frame: f32::NEG_INFINITY, assets: HashMap::default(), assets_asked: Default::default(), shape_seen: 0.0, hud_idle: false, rebuilt: 0,
-            text_capture: None, sel: None, sel_drag: false, clicks: (f32::NEG_INFINITY, 0.0, 0.0, 0), a11y_sent: HashMap::default(), a11y_focus: None,
+            text_capture: None, sel: None, sel_drag: false, clicks: (f32::NEG_INFINITY, 0.0, 0.0, 0), a11y_sent: HashMap::default(), a11y_focus: None, layout_gen: 0, a11y_gen: u64::MAX, a11y_owed: false,
             tree: TaffyTree::new(), tids: HashMap::default(), mkeys: HashMap::default(), moved: HashMap::default(), virt_views: HashMap::default(), virt_made: HashMap::default(), stack_w: HashMap::default(),
             scrolling: Scrolling::default(), touch: None, touches: HashSet::default(), touching: false, fling: None, over: HashMap::default(), motion: HashMap::default(), scroll_paint: false, event_t: None, ev: 0.0,
             recs: HashMap::default(), recomps: HashMap::default(), slides: HashMap::default(), no_recompose: false,
@@ -1641,6 +1646,7 @@ impl<S, M: Clone> Ui<S, M> {
         if self.dirty || self.clearing || self.owed || self.stage_due() || self.prep.pending() || self.held(now) || self.moving_at(b) || (self.sweeping && !self.arriving.is_empty()) || !self.kept_flips.is_empty() || !self.queued.is_empty() { return Some(now); }
         let soft = self.soft_wake().map(|w| w.max(now));
         // The mirror's places, owed while a scroll went on, once it rests.
+        let soft = if self.a11y_owed { let rest = self.motion.values().map(|m| m.last).fold(-1e9, f32::max) + SOFT_STOP + 1e-3; Some(soft.map_or(rest.max(now), |w| w.min(rest.max(now)))) } else { soft };
         if self.plates_ageing() { return Some((self.plate_frame + PLATE_FRAME).max(now).min(soft.unwrap_or(f32::MAX))); }
         // A wake on the beat clock is that much later on the runtime's.
         [self.wake_at(b).map(|w| (w + now - b).max(now)), self.stage_wake().map(|w| (w + now - b).max(now)), soft].into_iter().flatten().reduce(f32::min)
@@ -2719,8 +2725,17 @@ impl<S, M: Clone> Ui<S, M> {
     /// added or changed, elements gone, and where focus is now if it moved.
     pub fn a11y_diff(&mut self) -> Vec<A11yOp> {
         self.settle();
-        let now = self.a11y();
         let mut ops = vec![];
+        // While a scroll goes on and nothing was laid out, only where things are changes: the mirror is
+        // sent once the scroll rests (`SOFT_STOP` after the last step; `next_wake` asks for that frame).
+        if self.scroll_soft() && self.a11y_gen == self.layout_gen {
+            self.a11y_owed = true;
+            if self.a11y_focus != self.focus { self.a11y_focus = self.focus.clone(); ops.push(A11yOp::Focus(self.focus.clone())); }
+            return ops;
+        }
+        self.a11y_owed = false;
+        self.a11y_gen = self.layout_gen;
+        let now = self.a11y();
         let keys: HashSet<&str> = now.iter().map(|n| n.key.as_str()).collect();
         for k in self.a11y_sent.keys() { if !keys.contains(k.as_str()) { ops.push(A11yOp::Remove(k.clone())); } }
         let mut sent = HashMap::with_capacity_and_hasher(now.len(), Default::default());
@@ -3222,6 +3237,7 @@ impl<S, M: Clone> Ui<S, M> {
         self.stale_stages.clear();
         self.held_steps.clear();
         let sp = self.span_begin();
+        self.layout_gen += 1;
         self.relayout_inner();
         self.span_end(sp);
     }

@@ -1736,7 +1736,10 @@ inert to screen readers).
 
 **Syncing**: `Ui::a11y_diff()` compares by key the way layout does: against what was last handed over,
 changed or new nodes give `Set`, missing ones `Remove`, and a focus change `Focus`. So one press of a button
-sends only the count line and the focus.
+sends only the count line and the focus. While a scroll goes on (`SOFT_STOP` after its last step) and nothing was laid
+out, only places change: nothing is sent but focus, and the first call after the scroll rests sends the new places
+(`Ui::next_wake` asks for that frame); a scroll frame neither builds the mirror nor serialises it
+(`tests/access.rs`).
 
 **Web** (`web/amenui.js`, and the website's `web/page.html`): a tree of `<div>`s in `#a11y` (nested as in the mirror), each with
 `role` and `aria-*` attributes, fixed at the position where it is drawn; the whole tree has `opacity: 0` and

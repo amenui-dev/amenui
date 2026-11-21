@@ -76,3 +76,41 @@ fn at_opacity_zero_it_takes_no_pointer_and_a_screen_reader_finds_it() {
     ui.tick(1.3);
     assert_eq!(ui.state.pressed, 1, "seen, it takes the press");
 }
+
+struct L;
+fn long(_: &L) -> El<()> {
+    let list = (0..40).fold(col().key("list").fill_width().grow(1.0).scroll(), |c, i| c.child(text(format!("Row {i}"), 14.0, Paint::TEXT).key(format!("r{i}"))));
+    col().key("page").fill_width().fill_height().child(text("A title that stays", 18.0, Paint::INK).key("title")).child(list)
+}
+#[test]
+fn while_a_scroll_goes_on_the_mirror_is_sent_once_it_rests() {
+    use amenui::ui::A11yOp;
+    let mut ui = Ui::new(L, long, |_, _| {}, fonts(), 400, 300, 1.0);
+    ui.pointer_leave();
+    let mut t = 1.0;
+    ui.tick(t);
+    assert!(!ui.a11y_diff().is_empty(), "the first call sends the mirror");
+    let before: Vec<_> = ui.a11y();
+    // Scrolling: nothing is sent while it goes on, and a wake is asked for when it rests.
+    for _ in 0..5 {
+        t += 1.0 / 120.0;
+        ui.tick(t);
+        ui.wheel(200.0, 200.0, 8.0);
+        // The frame after it (the host ticks at each event and at the frame).
+        t += 1.0 / 120.0;
+        ui.tick(t);
+        assert!(ui.a11y_diff().is_empty(), "nothing sent while the scroll goes on");
+        ui.frame_drawn();
+    }
+    let last = t;
+    let wake = ui.next_wake(t).expect("a wake for the mirror");
+    assert!(wake <= last + 0.11, "woken by the time the scroll rests: {wake} after {last}");
+    // Frames go on without a scroll: the first after it rests sends the rows' new places.
+    let mut ops = vec![];
+    while ops.is_empty() && t < last + 0.5 { t += 1.0 / 60.0; ui.tick(t); ops = ui.a11y_diff(); ui.frame_drawn(); }
+    assert!(t >= last + 0.1 && t < last + 0.14, "sent as it rests: {t} after {last}");
+    let after = ui.a11y();
+    let moved = after.iter().filter(|n| before.iter().any(|b| b.key == n.key && b.rect != n.rect)).count();
+    assert!(moved > 10 && ops.iter().filter(|o| matches!(o, A11yOp::Set(_))).count() >= moved, "the rows' new places are sent: {moved} moved, {} ops", ops.len());
+    assert!(ui.a11y_diff().is_empty(), "and only once");
+}

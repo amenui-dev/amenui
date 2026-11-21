@@ -17,6 +17,9 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
   `FramePath::layout_from` (was `Ui::send`).
 
 - The runtime hashes its own maps and fingerprints with `fasthash::FastHasher` (a folded multiply), not SipHash.
+- While a scroll goes on, `Ui::a11y_diff` sends only focus: the mirror's new places go once the scroll rests
+  (`Ui::next_wake` asks for that frame). Every scroll frame on the web had rebuilt the mirror and sent every
+  element in the scroll area again, serialised.
 
 - `FramePath::layouts` and `layout_from`: the layouts since the frame before and where the first was asked for
   (the `Ui::relayout` call's file and line), shown at the end of `FramePath::line` as `layout 2 (src/ui.rs:2081)`.
