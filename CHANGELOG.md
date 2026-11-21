@@ -10,6 +10,10 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Faster scrolling, no late stalls
 
+- `FramePath::layouts` and `layout_from`: the layouts since the frame before and where the first was asked for
+  (the `Ui::relayout` call's file and line), shown at the end of `FramePath::line` as `layout 2 (src/ui.rs:2081)`.
+  `Ui::layouts_since_drawn`.
+
 - A partial frame draws stage 1's boxes in one render pass for each of its two images (was a pair of passes for
   each box: the M1 Lab's median frame opened 8, each loading and storing both images whole on a tile-based GPU).
   `Cost::passes` counts them.

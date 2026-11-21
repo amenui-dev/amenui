@@ -1496,8 +1496,10 @@ impl Renderer {
         let passes = 3 + lo.is_some() as u32 + tiles.is_some() as u32 + grid.is_some() as u32;
         // Full-size targets: ink, near, before (8 bytes a pixel or less) and the glyph atlas.
         let tex_mb = (sw * sh * 4.0 * 6.0 + (crate::text::ATLAS * crate::text::ATLAS * 2) as f32) / 1_048_576.0;
+        let laid = ui.layouts_since_drawn();
         let p = ui.perf_mut();
         p.dirty = dirty; p.passes = passes; p.tex_mb = tex_mb; p.path = self.path;
+        (p.path.layouts, p.path.layout_from) = laid;
         p.quality = q; p.auto = auto; p.particles = parts; p.particle_path = path;
         p.frame(submit);
         // The automatic level goes by the intervals between frames drawn while something moves.

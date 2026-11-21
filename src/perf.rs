@@ -99,8 +99,12 @@ pub struct FramePath {
     /// What put a partial frame's shaded boxes there: the three largest reasons, each with its boxes'
     /// share of the window (summed before they are merged, so they may overlap; `dirty::Parts::why`).
     pub shade_why: [(&'static str, f32); 3],
+    /// The layouts (view and taffy) since the frame before, and where the first was asked for (the
+    /// `Ui::relayout` call): a frame that only scrolled or repainted has none.
+    pub layouts: u32,
+    pub layout_from: Option<&'static std::panic::Location<'static>>,
 }
-impl Default for FramePath { fn default() -> Self { Self { moved: false, why: "", specialised: None, gated: 0, spec_why: "", shade: 0.0, soft: 1.0, stage: 1.0, reduced: 1.0, shade_why: [("", 0.0); 3] } } }
+impl Default for FramePath { fn default() -> Self { Self { moved: false, why: "", specialised: None, gated: 0, spec_why: "", shade: 0.0, soft: 1.0, stage: 1.0, reduced: 1.0, shade_why: [("", 0.0); 3], layouts: 0, layout_from: None } } }
 /// The three largest reasons of `why` (pixels each) as shares of `whole` pixels, largest first.
 pub fn top_why(why: &[(&'static str, f32)], whole: f32) -> [(&'static str, f32); 3] {
     let mut v: Vec<(&'static str, f32)> = why.iter().map(|&(w, a)| (w, (a / whole.max(1.0)).min(1.0))).collect();
@@ -108,14 +112,16 @@ pub fn top_why(why: &[(&'static str, f32)], whole: f32) -> [(&'static str, f32);
     std::array::from_fn(|k| v.get(k).copied().unwrap_or(("", 0.0)))
 }
 impl FramePath {
-    /// One line: `move yes  spec no (override)  shade 34% (band 20%, changed 9%, stage moved 5%)  soft 1  stage 0.75  lo 0.75`.
+    /// One line: `move yes  spec no (override)  shade 34% (band 20%, changed 9%, stage moved 5%)  soft 1  stage 0.75  lo 0.75`,
+    /// then `layout 2 (src/ui.rs:2081)` when the frame was laid out.
     pub fn line(&self) -> String {
         let or = |w: &str| if w.is_empty() { String::new() } else { format!(" ({w})") };
         let names = |mask: u16| (0..16u8).filter(|m| mask & (1 << m) != 0).map(|m| crate::style::Material::from_id(m).name()).collect::<Vec<_>>().join("+");
         let spec = match (self.specialised, self.gated) { (Some(m), _) => format!("yes {}", crate::style::Material::from_id(m).name()), (None, g) if g != 0 => format!("each {}", names(g)), _ => format!("no{}", or(self.spec_why)) };
         let why: Vec<String> = self.shade_why.iter().filter(|w| !w.0.is_empty()).map(|w| format!("{} {:.0}%", w.0, w.1 * 100.0)).collect();
         let why = if why.is_empty() { String::new() } else { format!(" ({})", why.join(", ")) };
-        format!("move {}  spec {spec}  shade {:.0}%{why}  soft {}  stage {}  lo {}", if self.moved { "yes".to_string() } else { format!("no{}", or(self.why)) }, self.shade * 100.0, self.soft, self.stage, self.reduced)
+        let laid = match (self.layouts, self.layout_from) { (0, _) => String::new(), (n, Some(l)) => format!("  layout {n} ({}:{})", l.file(), l.line()), (n, None) => format!("  layout {n}") };
+        format!("move {}  spec {spec}  shade {:.0}%{why}  soft {}  stage {}  lo {}{laid}", if self.moved { "yes".to_string() } else { format!("no{}", or(self.why)) }, self.shade * 100.0, self.soft, self.stage, self.reduced)
     }
 }
 /// The frame period the drop count measures against, ms.

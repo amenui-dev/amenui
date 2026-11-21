@@ -895,6 +895,10 @@ pub struct Ui<S, M> {
     defer: u32,
     /// What waits: a layout (and the paint after it), or only a paint (`Ui::settle`).
     stale_layout: bool,
+    /// Where the layout left for the frame was asked for (`Ui::relayout`'s caller), and the layouts since the
+    /// last frame drawn with where the first was asked for (`perf::FramePath::layouts`).
+    stale_from: Option<&'static std::panic::Location<'static>>,
+    laid: (u32, Option<&'static std::panic::Location<'static>>),
     stale_paint: bool,
     /// What the paints that answer the pointer (`El::fill_hover`, `fill_held`, `border_hover`) were
     /// painted for: the hovered, the held and the focused key (`Ui::under_now`); `None` when no element
@@ -1231,7 +1235,7 @@ impl<S, M: Clone> Ui<S, M> {
             tree: TaffyTree::new(), tids: HashMap::new(), mkeys: HashMap::new(), moved: HashMap::new(), virt_views: HashMap::new(), virt_made: HashMap::new(), stack_w: HashMap::new(),
             scrolling: Scrolling::default(), touch: None, touches: HashSet::new(), touching: false, fling: None, over: HashMap::new(), motion: HashMap::new(), scroll_paint: false, event_t: None, ev: 0.0,
             recs: HashMap::new(), recomps: HashMap::new(), slides: HashMap::new(), no_recompose: false,
-            meshes: crate::mesh::Library::default(), mesh_hover: None, glyphs: Default::default(), prep: Default::default(), move_over: None, particle_gpu: false, motes: vec![], shed_at: HashMap::new(), shed_owed: HashMap::new(), field_marks: HashMap::new(), seen: HashMap::new(), outlines: HashMap::new(), pens_told: HashMap::new(), pens_found: vec![], decodes: HashMap::new(), decode_last: HashMap::new(), last_morph: None, left: Default::default(), queued: vec![], flushing: false, coalesce: false, defer: 0, stale_layout: false, stale_paint: false, fill_state: None, motes_made: 0,
+            meshes: crate::mesh::Library::default(), mesh_hover: None, glyphs: Default::default(), prep: Default::default(), move_over: None, particle_gpu: false, motes: vec![], shed_at: HashMap::new(), shed_owed: HashMap::new(), field_marks: HashMap::new(), seen: HashMap::new(), outlines: HashMap::new(), pens_told: HashMap::new(), pens_found: vec![], decodes: HashMap::new(), decode_last: HashMap::new(), last_morph: None, left: Default::default(), queued: vec![], flushing: false, coalesce: false, defer: 0, stale_layout: false, stale_from: None, laid: (0, None), stale_paint: false, fill_state: None, motes_made: 0,
             fmap: crate::fieldmap::FieldMap::default(), stirr_at: HashMap::new(), fmap_size: (0.0, 0.0), fmap_ink: u64::MAX, fmap_inks: HashMap::new(), strand_faded: HashMap::new(), strand_cache: HashMap::new(), strand_hold: HashMap::new(), strand_drawn: vec![], trace_drawn: vec![], leaders: vec![], echoes: HashMap::new(), echo_at: f32::NEG_INFINITY, frozen: None, trace_head: HashMap::new(),
         };
         ui.resize(w, h, scale);
@@ -1715,9 +1719,13 @@ impl<S, M: Clone> Ui<S, M> {
     }
     /// Ask for a frame even though nothing changed (the host lost what it showed).
     pub fn invalidate(&mut self) { self.dirty = true; }
+    /// The layouts since the last frame drawn, and where the first was asked for (`file:line` of the
+    /// `Ui::relayout` call, or of the call that left it for the frame): for the readout.
+    pub fn layouts_since_drawn(&self) -> (u32, Option<&'static std::panic::Location<'static>>) { self.laid }
     /// The host drew a frame of the current scene.
     pub fn frame_drawn(&mut self) {
         self.dirty = false;
+        self.laid = (0, None);
         // The stages' scale goes by the frames drawn while stages are on the page.
         if let Some(&(t, c)) = self.perf.frames.back() && t != self.scaler_fed && self.governed && !self.scene.stages.is_empty() && self.stage_pin.is_none() {
             self.scaler_fed = t;
@@ -3182,8 +3190,12 @@ impl<S, M: Clone> Ui<S, M> {
     }
     /// View → taffy tree → absolute rects → scene (inside a pointer move or a wheel, once before the
     /// frame instead: `Ui::settle`).
+    #[track_caller]
     pub fn relayout(&mut self) {
-        if self.defer > 0 { self.stale_layout = true; self.dirty = true; return; }
+        let here = std::panic::Location::caller();
+        if self.defer > 0 { self.stale_from.get_or_insert(here); self.stale_layout = true; self.dirty = true; return; }
+        let from = self.stale_from.take().unwrap_or(here);
+        self.laid = (self.laid.0 + 1, self.laid.1.or(Some(from)));
         self.stale_layout = false;
         self.stale_stages.clear();
         self.held_steps.clear();

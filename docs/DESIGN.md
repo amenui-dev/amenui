@@ -2208,7 +2208,10 @@ material, or `no` with why (an override, a material from source, still counting,
 shaded at full resolution (the shade boxes), with the three reasons whose boxes cover the most of it (`FramePath::shade_why`,
 each a share of the window summed before the boxes merge, so they may overlap: what changed, the band a move scrolled in,
 the scroll areas, the lens, the field map, the marks, a lattice other than the frame's, a picture given, a plate's
-view, a stage moved or rescaled); and the soft, stage and reduced scales. `tests/scroll_move.rs` checks it
+view, a stage moved or rescaled); the soft, stage and reduced scales; and, when the view was laid out since the
+frame before, how many times and where the first was asked for (`layout 2 (src/ui.rs:2081)`: the `Ui::relayout`
+call, or the call that left it for the frame when input is coalesced; `FramePath::layouts`, `layout_from`). A
+scroll lays nothing out. `tests/scroll_move.rs` checks it
 against what the renderer counted.
 
 **What pointer movement costs**: moving the pointer neither lays out nor shapes text. Parallax uses

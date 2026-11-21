@@ -58,6 +58,8 @@ fn a_slow_scroll_shades_only_the_band_it_brings_in_and_draws_the_frame_drawn_who
                 if c.moved == 0 { continue; }
                 moved += 1;
                 assert!((path.shade - c.material as f32 / (w * h) as f32).abs() < 1e-3, "{mat:?} frame {f}: the readout's shade share: {}", path.line());
+                // A scroll lays nothing out.
+                assert_eq!(path.layouts, 0, "{mat:?} frame {f}: {}", path.line());
                 // Stage 1's boxes share one pass for each image.
                 assert_eq!(c.passes, 2, "{mat:?} frame {f}: stage 1 opened {} passes", c.passes);
                 // What put the boxes there: the band scrolled in among the three largest, none above the share.
@@ -302,4 +304,25 @@ fn a_ground_shape_behind_the_scroll_area_is_not_shaded_again() {
         }
         assert!(moved >= 12, "{mat:?}: only {moved} of 16 frames moved the last frame");
     }
+}
+
+#[test]
+fn a_frame_laid_out_names_where_the_layout_was_asked_for() {
+    let Ok(mut r) = Offscreen::try_new(W, H) else { eprintln!("no GPU adapter here: skipped"); return };
+    // The state's tick changes the view every frame (coalesced input, as the web and desktop hosts run).
+    let mut u = open(Material::Plain, 1.0).on_tick(|_, _| true);
+    u.coalesce(true);
+    let look = u.look();
+    let mut t = 5.0;
+    for _ in 0..3 { t += 1.0 / 60.0; u.tick(t); let _ = r.render(&mut u, &look); }
+    let path = u.perf().path;
+    assert_eq!(path.layouts, 1, "{}", path.line());
+    assert!(path.layout_from.is_some_and(|l| l.file().ends_with("ui.rs")) && path.line().contains("  layout 1 (src"), "{}", path.line());
+    // Scrolled, nothing is laid out again.
+    let mut u = open(Material::Plain, 1.0);
+    u.coalesce(true);
+    for _ in 0..3 { t += 1.0 / 60.0; u.tick(t); u.wheel(240.0, 200.0, 6.0); u.tick(t); let _ = r.render(&mut u, &look); }
+    let path = u.perf().path;
+    assert_eq!(path.layouts, 0, "{}", path.line());
+    assert!(!path.line().contains("layout"), "{}", path.line());
 }
