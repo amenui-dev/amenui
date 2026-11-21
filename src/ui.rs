@@ -898,6 +898,9 @@ pub struct Ui<S, M> {
     /// Where the layout left for the frame was asked for (`Ui::relayout`'s caller), and the layouts since the
     /// last frame drawn with where the first was asked for (`perf::FramePath::layouts`).
     stale_from: Option<&'static std::panic::Location<'static>>,
+    /// The wheel gesture under way: the key of the node that took its last step, when, and where the
+    /// pointer was (`WHEEL_LATCH`).
+    wheel_latch: Option<(String, f32, (f32, f32))>,
     laid: (u32, Option<&'static std::panic::Location<'static>>),
     stale_paint: bool,
     /// What the paints that answer the pointer (`El::fill_hover`, `fill_held`, `border_hover`) were
@@ -1039,6 +1042,10 @@ struct Motion { off: f32, v: f32, last: f32 }
 /// A scroll area is still scrolling this long after its offset last changed (s); then one frame is
 /// drawn sharp (DESIGN.md §1.12).
 pub const SOFT_STOP: f32 = 0.1;
+/// A wheel gesture goes on while its steps come less than this apart (s) and the pointer stays where it was:
+/// each step goes to the node that took the one before, so an element that takes the wheel (`El::on_wheel`)
+/// scrolled under the pointer by the gesture (a trackpad's momentum) does not take it over (DESIGN.md §1.8.2).
+pub const WHEEL_LATCH: f32 = 0.5;
 /// Tells the state where a scroll node is: (state, key, offset, where an element is in it).
 pub type ScrollHook<S> = fn(&mut S, &str, f32, &dyn Fn(&str) -> Option<f32>) -> bool;
 /// How quickly the measured scroll speed follows the motion (s): long enough that one wheel notch in one
@@ -1235,7 +1242,7 @@ impl<S, M: Clone> Ui<S, M> {
             tree: TaffyTree::new(), tids: HashMap::new(), mkeys: HashMap::new(), moved: HashMap::new(), virt_views: HashMap::new(), virt_made: HashMap::new(), stack_w: HashMap::new(),
             scrolling: Scrolling::default(), touch: None, touches: HashSet::new(), touching: false, fling: None, over: HashMap::new(), motion: HashMap::new(), scroll_paint: false, event_t: None, ev: 0.0,
             recs: HashMap::new(), recomps: HashMap::new(), slides: HashMap::new(), no_recompose: false,
-            meshes: crate::mesh::Library::default(), mesh_hover: None, glyphs: Default::default(), prep: Default::default(), move_over: None, particle_gpu: false, motes: vec![], shed_at: HashMap::new(), shed_owed: HashMap::new(), field_marks: HashMap::new(), seen: HashMap::new(), outlines: HashMap::new(), pens_told: HashMap::new(), pens_found: vec![], decodes: HashMap::new(), decode_last: HashMap::new(), last_morph: None, left: Default::default(), queued: vec![], flushing: false, coalesce: false, defer: 0, stale_layout: false, stale_from: None, laid: (0, None), stale_paint: false, fill_state: None, motes_made: 0,
+            meshes: crate::mesh::Library::default(), mesh_hover: None, glyphs: Default::default(), prep: Default::default(), move_over: None, particle_gpu: false, motes: vec![], shed_at: HashMap::new(), shed_owed: HashMap::new(), field_marks: HashMap::new(), seen: HashMap::new(), outlines: HashMap::new(), pens_told: HashMap::new(), pens_found: vec![], decodes: HashMap::new(), decode_last: HashMap::new(), last_morph: None, left: Default::default(), queued: vec![], flushing: false, coalesce: false, defer: 0, stale_layout: false, stale_from: None, wheel_latch: None, laid: (0, None), stale_paint: false, fill_state: None, motes_made: 0,
             fmap: crate::fieldmap::FieldMap::default(), stirr_at: HashMap::new(), fmap_size: (0.0, 0.0), fmap_ink: u64::MAX, fmap_inks: HashMap::new(), strand_faded: HashMap::new(), strand_cache: HashMap::new(), strand_hold: HashMap::new(), strand_drawn: vec![], trace_drawn: vec![], leaders: vec![], echoes: HashMap::new(), echo_at: f32::NEG_INFINITY, frozen: None, trace_head: HashMap::new(),
         };
         ui.resize(w, h, scale);
@@ -2571,17 +2578,26 @@ impl<S, M: Clone> Ui<S, M> {
     fn wheel_xy_now(&mut self, x: f32, y: f32, dx: f32, dy: f32) {
         self.dirty = true;
         self.heard();
-        let mut at = self.hit(x, y);
-        // An element that takes the wheel itself (a 3D view's dolly) gets it before any scroll node.
-        if let Some(i) = at.and_then(|i| self.up(i, |n| n.on_wheel.is_some())) && let Some(f) = self.nodes[i].on_wheel.clone() {
-            if let Some(m) = f(dx, dy) { self.send_at(Some(i), m); }
+        // A step of a gesture under way starts at the node that took the one before (`WHEEL_LATCH`).
+        let latched = self.wheel_latch.take().filter(|l| self.clock - l.1 < WHEEL_LATCH && l.2 == (x, y)).and_then(|l| self.nodes.iter().position(|n| n.key == l.0));
+        let mut at = latched.or_else(|| self.hit(x, y));
+        // Held by the gesture while nothing takes its steps (a scroll at its end), not handed on.
+        let mut took = latched;
+        // An element that takes the wheel itself (a 3D view's dolly) gets it before any scroll node; when it
+        // makes nothing of it, the scroll nodes have it.
+        if let Some(i) = at.and_then(|i| self.up(i, |n| n.on_wheel.is_some())) && let Some(f) = self.nodes[i].on_wheel.clone() && let Some(m) = f(dx, dy) {
+            self.wheel_latch = Some((self.nodes[i].key.clone(), self.clock, (x, y)));
+            self.send_at(Some(i), m);
             return;
         }
+        let mut moved = false;
         while let Some(i) = at.and_then(|i| self.up(i, |n| n.scroll)) {
             let d = if self.nodes[i].horizontal { if dx != 0.0 { dx } else { dy } } else { dy };
-            if d != 0.0 && self.scroll_by(i, d) { self.scrolled(); return; }
+            if d != 0.0 && self.scroll_by(i, d) { (took, moved) = (Some(i), true); break; }
             at = self.nodes[i].parent;
         }
+        if let Some(i) = took { self.wheel_latch = Some((self.nodes[i].key.clone(), self.clock, (x, y))); }
+        if moved { self.scrolled(); }
     }
 
     /// A key press; the flag is Shift. Returns whether anything used it.
@@ -2916,6 +2932,9 @@ impl<S, M: Clone> Ui<S, M> {
     }
 
     // ── Internals ────────────────────────────────────────────────────────────────────────────────
+    /// Update with a handler's message and lay out again; the layout is put down to the handler's call
+    /// (`perf::FramePath::layout_from` names which input sent it).
+    #[track_caller]
     fn send(&mut self, m: M) {
         let sp = self.span_begin();
         (self.update)(&mut self.state, m);
@@ -2925,6 +2944,7 @@ impl<S, M: Clone> Ui<S, M> {
     /// `send` for a message from a handler of node `at`: under an element whose messages are its own
     /// (`El::local_messages`), only it and the elements that change with a stage (`El::steps`) are viewed
     /// again, when they are laid out as they were (`Ui::restage`); otherwise the page is.
+    #[track_caller]
     fn send_at(&mut self, at: Option<usize>, m: M) {
         let local = at.and_then(|i| self.up(i, |n| n.stage.as_ref().is_some_and(|c| c.local))).filter(|_| self.stage_of.is_some());
         let Some(l) = local else { return self.send(m) };

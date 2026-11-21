@@ -814,7 +814,7 @@ finds the nearest scrolling ancestor.
 - The corner marks follow the most recent input: with the pointer they frame the hovered control, or the
   focus when nothing is hovered; with the keyboard they frame the focus.
 - The wheel goes to the nearest scrolling ancestor first, and to the next one out once that has reached
-  its end. When focus moves to a control outside a scroll area's view, the area scrolls to show it.
+  its end; the steps of one gesture stay with what took the first (§1.8.2). When focus moves to a control outside a scroll area's view, the area scrolls to show it.
 - A number control that loses focus while being typed in behaves as if Esc were pressed.
 - **Tab order**: `El::tab_order` puts positive numbers first, lowest first, then everything at 0 (the
   default) in document order; a negative number keeps an element out of Tab while a press, a skip link or
@@ -984,6 +984,15 @@ drag is captured until release, and there is hover. A finger:
 a line, page deltas the viewport height. A trackpad's own momentum is a stream of wheel events, so no
 momentum is added. On the web a wheel with Ctrl is a trackpad pinch: no scrolling and no page zoom
 (`preventDefault`).
+
+**Wheel gestures**: a step less than `WHEEL_LATCH` = 0.5 s after the one before, with the pointer where it was,
+belongs to the same gesture and goes to the node that took the one before (a scroll node, or an element with
+`El::on_wheel`), as browsers keep a wheel transaction with its first target; a scroll at its end holds the
+gesture. So a page scrolled by a trackpad's momentum keeps scrolling when a 3D view comes under the pointer,
+instead of the view taking the rest of the momentum as dolly steps, each a message and a layout of the page
+(on the M1 /components/ index, an orbit preview did that from the first change of direction: 11 ms of CPU a
+frame and a page that stopped). A new gesture (after a pause or a pointer move) goes to what is under the
+pointer. An `on_wheel` handler that returns `None` leaves the step to the scroll nodes.
 
 **Minimum hit size**: when press, hover and the cursor shape look for a target (`hit_target`), the topmost
 element under the pointer (or its ancestor) is it if it can be operated; otherwise it is the control, among
@@ -2081,7 +2090,8 @@ brighten.
 (bounding-sphere culling, then Möller–Trumbore), so headless, WebGL2 (where readback is asynchronous) and native
 all behave the same, synchronously. `El::on_pick(|Pick| ..)`: `Pick::Hover(Option<MeshHit>)` when the pointer
 moves to another instance (or leaves), `Pick::Press(..)` on press, with `MeshHit { object, instance }`, through
-the existing hit-test path. `El::on_wheel` gets the wheel before scrolling does. `widgets::orbit` is the camera
+the existing hit-test path. `El::on_wheel` gets the wheel before scrolling does, except in the middle of a gesture
+that is scrolling (§1.8.2), and leaves it to scrolling when it returns `None`. `widgets::orbit` is the camera
 control: dragging orbits (computed from the angles at the press, `per_px` degrees per pixel), the wheel dollies
 (`dolly`), the arrow keys turn once focused (`step_deg`, Shift × 4); on release it takes the velocity of the last
 0.1 s and decelerates by the exact integral of `v e^(−friction t)` (like the fling in §1.8.2), stopping below

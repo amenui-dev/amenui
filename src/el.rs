@@ -1179,7 +1179,8 @@ impl<M> El<M> {
     pub fn markr(mut self, slot: u8) -> Self { if let Content::Picture { fx, .. } = &mut self.content { *fx = slot; } self }
     /// Hear which copy of a `scene3d` element the pointer is over and which one it presses.
     pub fn on_pick(mut self, f: impl Fn(crate::mesh::Pick) -> Option<M> + 'static) -> Self { self.on_pick = Some(Rc::new(f)); self }
-    /// Take the wheel over this element (before any scroll node): dx, dy in logical px.
+    /// Take the wheel over this element (before any scroll node, unless a gesture already scrolling comes over it):
+    /// dx, dy in logical px. `None` leaves the step to the scroll nodes.
     pub fn on_wheel(mut self, f: impl Fn(f32, f32) -> Option<M> + 'static) -> Self { self.on_wheel = Some(Rc::new(f)); self }
     /// Draw this subtree as its own skeleton (DESIGN.md §1.23): laid out exactly as it is, but every
     /// line of text is a bar as wide as that line measures, every picture or 3D element a block, every

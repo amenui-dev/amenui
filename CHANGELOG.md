@@ -10,6 +10,12 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Faster scrolling, no late stalls
 
+- A wheel gesture stays with what took its first step (`WHEEL_LATCH` = 0.5 s between steps, the pointer still):
+  a 3D view (`El::on_wheel`, `widgets::orbit`) scrolled under the pointer no longer takes over a page's scroll
+  momentum, which stopped the page and laid it out again every frame. An `on_wheel` handler that returns `None`
+  leaves the step to scrolling. A layout a handler's message asks for is put down to the handler's call in
+  `FramePath::layout_from` (was `Ui::send`).
+
 - `FramePath::layouts` and `layout_from`: the layouts since the frame before and where the first was asked for
   (the `Ui::relayout` call's file and line), shown at the end of `FramePath::line` as `layout 2 (src/ui.rs:2081)`.
   `Ui::layouts_since_drawn`.
