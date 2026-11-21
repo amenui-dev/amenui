@@ -16,6 +16,7 @@ pub mod fieldmap;
 pub mod strand;
 pub mod gaze;
 pub mod form;
+pub mod fasthash;
 pub mod gesture;
 pub mod hit;
 pub mod i18n;

@@ -2224,6 +2224,11 @@ call, or the call that left it for the frame when input is coalesced; `FramePath
 scroll lays nothing out. `tests/scroll_move.rs` checks it
 against what the renderer counted.
 
+**Hashing**: the runtime's own maps and fingerprints (node keys, instance and glyph ids, signatures) use
+`fasthash::FastHasher`, a folded-multiply word hash (as foldhash and ahash mix), not the standard library's
+SipHash, which cost about 0.4 ms a frame in wasm on the M1 when the components page laid out; none of those
+keys is chosen by an attacker.
+
 **What pointer movement costs**: moving the pointer neither lays out nor shapes text. Parallax uses
 `El::shift(dx, dy)` (the whole subtree moves after layout, outside taffy's styles); the lens is counted in the
 boxes only where it can reach: beyond `dirty::LENS_REACH` (2.2) radii from the pointer its bell is below 0.01,

@@ -354,10 +354,10 @@ fn changed(a: &[Instance], b: &[Instance], pad: f32, out: &mut Vec<Bx>) {
     while hi < a.len() - lo && hi < b.len() - lo && a[a.len() - 1 - hi] == b[b.len() - 1 - hi] { hi += 1; }
     let (a, b) = (&a[lo..a.len() - hi], &b[lo..b.len() - hi]);
     if a.is_empty() || b.is_empty() { if !a.is_empty() || !b.is_empty() { run(a, b, out); } return; }
-    let key = |w: &[Instance]| { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); bytemuck::cast_slice::<Instance, u8>(w).hash(&mut h); h.finish() };
+    let key = |w: &[Instance]| { use std::hash::{Hash, Hasher}; let mut h = crate::fasthash::FastHasher::new(); bytemuck::cast_slice::<Instance, u8>(w).hash(&mut h); h.finish() };
     // Where each run of `K` starts in `b`, by its hash: the first place, then each next one (`more`), in order.
     let n = b.len().saturating_sub(K - 1);
-    let (mut at, mut more): (std::collections::HashMap<u64, usize>, Vec<usize>) = (std::collections::HashMap::new(), vec![usize::MAX; n]);
+    let (mut at, mut more): (std::collections::HashMap<u64, usize>, Vec<usize>) = (std::collections::HashMap::default(), vec![usize::MAX; n]);
     for j in (0..n).rev() { if let Some(p) = at.insert(key(&b[j..j + K]), j) { more[j] = p; } }
     let (mut i, mut j) = (0, 0);
     while i < a.len() && j < b.len() {

@@ -7,9 +7,10 @@ use crate::scene::{EVERYWHERE, Field, GLYPH, Instance, MESH, PICTURE, SHAPE, Sce
 use crate::gaze;
 use crate::style::{Gaze, GazeMode, Look, gaze as kinds};
 use crate::text::{Face, MONO, Nav, Para, Text};
-use std::collections::{HashMap, HashSet};
+use crate::fasthash::{HashMap, HashSet};
 use std::rc::Rc;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use crate::fasthash::FastHasher as DefaultHasher;
+use std::hash::{Hash, Hasher};
 use taffy::prelude::*;
 
 /// Logical px.
@@ -431,9 +432,9 @@ struct PlateKeep { sig: u64, timing: Timing, births: Vec<(u64, f32)>, text_birth
 struct KeepOpen { root: usize, slot: u8, start: usize, sig: Option<u64>, lens: [usize; 7] }
 /// One node of a cached subtree into its signature (`Ui::keep_sig`): what it is drawn from.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn sig_node(h: &mut std::hash::DefaultHasher, key: &str, nums: [f32; 15], flags: (bool, bool, bool, bool, crate::el::Reveal, u16, &Option<String>), fill: Option<Paint>, border: Option<(f32, Paint)>, respond: Response, content: &Content) {
+fn sig_node(h: &mut crate::fasthash::FastHasher, key: &str, nums: [f32; 15], flags: (bool, bool, bool, bool, crate::el::Reveal, u16, &Option<String>), fill: Option<Paint>, border: Option<(f32, Paint)>, respond: Response, content: &Content) {
     use std::hash::Hash;
-    let paint = |p: Option<Paint>, h: &mut std::hash::DefaultHasher| p.map(|p| ([p.tone, p.accent, p.alpha].map(f32::to_bits), p.hue)).hash(h);
+    let paint = |p: Option<Paint>, h: &mut crate::fasthash::FastHasher| p.map(|p| ([p.tone, p.accent, p.alpha].map(f32::to_bits), p.hue)).hash(h);
     key.hash(h);
     nums.map(f32::to_bits).hash(h);
     flags.hash(h);
@@ -456,7 +457,7 @@ impl PlateKeep {
         let mut ids: Vec<(u64, f32)> = owners.iter().filter_map(|&(_, id)| births.get(&id).map(|&b| (id, b))).collect();
         ids.dedup_by_key(|x| x.0);
         let last = root + keys.len().saturating_sub(1);
-        let tb = keys.iter().filter_map(|key| { let mut h = std::hash::DefaultHasher::new(); key.hash(&mut h); let h = h.finish(); text_births.get(&h).map(|&b| (h, b)) }).collect();
+        let tb = keys.iter().filter_map(|key| { let mut h = crate::fasthash::FastHasher::new(); key.hash(&mut h); let h = h.finish(); text_births.get(&h).map(|&b| (h, b)) }).collect();
         let recs = jobs.iter().filter(|j| j.0 >= root && j.0 <= last).map(|j| j.1.to_string()).collect();
         let laid = laid.iter().filter(|l| l.0 >= root && l.0 <= last).map(|l| (l.0 - root, l.1.clone(), l.2.clone())).collect();
         let latest = insts.iter().map(|i| i.extra[3]).fold(f32::NEG_INFINITY, f32::max);
@@ -1230,20 +1231,20 @@ impl<S, M: Clone> Ui<S, M> {
     pub fn new(state: S, view: fn(&S) -> El<M>, update: fn(&mut S, M), faces: Vec<Face>, w: u32, h: u32, scale: f32) -> Self {
         let mut ui = Self {
             state, view, update, text: Text::new(faces), size: (0.0, 0.0), scale, clock: 0.0, wall: 0.0, bclock: crate::beat::Clock::default(), sent: vec![], sets: vec![], nodes: vec![], scene: Scene::default(),
-            owners: vec![], page_len: 0, field: Field::default(), scroll: HashMap::new(), births: HashMap::new(), ramp: None, text_births: HashMap::new(),
-            hover: None, focus: None, after_focus: None, fit_short: vec![], grain_at: None, bloom_at: None, clears: HashMap::new(), clearing: false, clear_many: vec![], flow_own: vec![], flow_join: None, fit_k: HashMap::new(), fit_last: None, pressed: None, capture: None, modal_at: None, modal_key: None, return_focus: None, split: None, splits: 0,
-            keyboard: false, marks: Marks::default(), sized: None, commands: None, unseen: vec![], stages: vec![], stage_input: (false, false), stage_add_ms: 0.0, faces_to: None, kept_to: None, kept_told: HashMap::new(), kept_flips: vec![], root_roles: Default::default(), scaler: Default::default(), stage_pin: None, scaler_fed: f64::NEG_INFINITY, governed: false, stepped: None, stage_of: None, stale_stages: vec![], held_steps: vec![], restaging: None, base: vec![], tags: vec![], roles: vec![],
-            run: None, painted_phase: 0, flows: HashMap::new(), ghosts: vec![], grows: vec![], ground_seen: None, ground_hold: None, body_len: 0, animating: false, lifted: HashMap::new(),
-            gaze_of: None, gaze_seen: HashMap::new(), annots: vec![], focused: None, focus_moved: false, readout: gaze::Readout::default(), hovered: None, pointer_of: None, scripted: false, ticked: None, warm: None, warmed: None, owed: false, soft_shown: false, ambient: 60.0, input_t: -1e9, frame_t: -1e9, tick_gap: 1.0 / 60.0, unused_key: None, shortcut: None, scrolled_of: None, released: None, input: None,
+            owners: vec![], page_len: 0, field: Field::default(), scroll: HashMap::default(), births: HashMap::default(), ramp: None, text_births: HashMap::default(),
+            hover: None, focus: None, after_focus: None, fit_short: vec![], grain_at: None, bloom_at: None, clears: HashMap::default(), clearing: false, clear_many: vec![], flow_own: vec![], flow_join: None, fit_k: HashMap::default(), fit_last: None, pressed: None, capture: None, modal_at: None, modal_key: None, return_focus: None, split: None, splits: 0,
+            keyboard: false, marks: Marks::default(), sized: None, commands: None, unseen: vec![], stages: vec![], stage_input: (false, false), stage_add_ms: 0.0, faces_to: None, kept_to: None, kept_told: HashMap::default(), kept_flips: vec![], root_roles: Default::default(), scaler: Default::default(), stage_pin: None, scaler_fed: f64::NEG_INFINITY, governed: false, stepped: None, stage_of: None, stale_stages: vec![], held_steps: vec![], restaging: None, base: vec![], tags: vec![], roles: vec![],
+            run: None, painted_phase: 0, flows: HashMap::default(), ghosts: vec![], grows: vec![], ground_seen: None, ground_hold: None, body_len: 0, animating: false, lifted: HashMap::default(),
+            gaze_of: None, gaze_seen: HashMap::default(), annots: vec![], focused: None, focus_moved: false, readout: gaze::Readout::default(), hovered: None, pointer_of: None, scripted: false, ticked: None, warm: None, warmed: None, owed: false, soft_shown: false, ambient: 60.0, input_t: -1e9, frame_t: -1e9, tick_gap: 1.0 / 60.0, unused_key: None, shortcut: None, scrolled_of: None, released: None, input: None,
             dirty: true, look_of: None, locale_of: None, timing: Timing::default(), wake_of: None, latest_birth: f32::NEG_INFINITY, gaze_until: f32::NEG_INFINITY,
             marks_moving: false, caret: None, caret_on: true, static_loose: false, mclock: 0.0, moving: false, gclock: 0.0, ground_moving: false,
-            perf: crate::perf::Perf { quality: 1.0, ..Default::default() }, span: 0, painting: false, overlay: 0, overlay_at: 0.0, overlay_box: None, overlay_w: (0, (0.0, 0.0), 0.0), fade_s: REDUCED_FADE, came: vec![], arriving: HashMap::new(), sweeping: false, swept_nodes: vec![], remeasure: false, plate_slots: Default::default(), plate_sig: Default::default(), plate_keep: Default::default(), faces_added: 0, plate_clear: vec![], plate_over: vec![], pclock: 0.0, plate_frame: f32::NEG_INFINITY, assets: HashMap::new(), assets_asked: Default::default(), shape_seen: 0.0, hud_idle: false, rebuilt: 0,
-            text_capture: None, sel: None, sel_drag: false, clicks: (f32::NEG_INFINITY, 0.0, 0.0, 0), a11y_sent: HashMap::new(), a11y_focus: None,
-            tree: TaffyTree::new(), tids: HashMap::new(), mkeys: HashMap::new(), moved: HashMap::new(), virt_views: HashMap::new(), virt_made: HashMap::new(), stack_w: HashMap::new(),
-            scrolling: Scrolling::default(), touch: None, touches: HashSet::new(), touching: false, fling: None, over: HashMap::new(), motion: HashMap::new(), scroll_paint: false, event_t: None, ev: 0.0,
-            recs: HashMap::new(), recomps: HashMap::new(), slides: HashMap::new(), no_recompose: false,
-            meshes: crate::mesh::Library::default(), mesh_hover: None, glyphs: Default::default(), prep: Default::default(), move_over: None, particle_gpu: false, motes: vec![], shed_at: HashMap::new(), shed_owed: HashMap::new(), field_marks: HashMap::new(), seen: HashMap::new(), outlines: HashMap::new(), pens_told: HashMap::new(), pens_found: vec![], decodes: HashMap::new(), decode_last: HashMap::new(), last_morph: None, left: Default::default(), queued: vec![], flushing: false, coalesce: false, defer: 0, stale_layout: false, stale_from: None, wheel_latch: None, laid: (0, None), stale_paint: false, fill_state: None, motes_made: 0,
-            fmap: crate::fieldmap::FieldMap::default(), stirr_at: HashMap::new(), fmap_size: (0.0, 0.0), fmap_ink: u64::MAX, fmap_inks: HashMap::new(), strand_faded: HashMap::new(), strand_cache: HashMap::new(), strand_hold: HashMap::new(), strand_drawn: vec![], trace_drawn: vec![], leaders: vec![], echoes: HashMap::new(), echo_at: f32::NEG_INFINITY, frozen: None, trace_head: HashMap::new(),
+            perf: crate::perf::Perf { quality: 1.0, ..Default::default() }, span: 0, painting: false, overlay: 0, overlay_at: 0.0, overlay_box: None, overlay_w: (0, (0.0, 0.0), 0.0), fade_s: REDUCED_FADE, came: vec![], arriving: HashMap::default(), sweeping: false, swept_nodes: vec![], remeasure: false, plate_slots: Default::default(), plate_sig: Default::default(), plate_keep: Default::default(), faces_added: 0, plate_clear: vec![], plate_over: vec![], pclock: 0.0, plate_frame: f32::NEG_INFINITY, assets: HashMap::default(), assets_asked: Default::default(), shape_seen: 0.0, hud_idle: false, rebuilt: 0,
+            text_capture: None, sel: None, sel_drag: false, clicks: (f32::NEG_INFINITY, 0.0, 0.0, 0), a11y_sent: HashMap::default(), a11y_focus: None,
+            tree: TaffyTree::new(), tids: HashMap::default(), mkeys: HashMap::default(), moved: HashMap::default(), virt_views: HashMap::default(), virt_made: HashMap::default(), stack_w: HashMap::default(),
+            scrolling: Scrolling::default(), touch: None, touches: HashSet::default(), touching: false, fling: None, over: HashMap::default(), motion: HashMap::default(), scroll_paint: false, event_t: None, ev: 0.0,
+            recs: HashMap::default(), recomps: HashMap::default(), slides: HashMap::default(), no_recompose: false,
+            meshes: crate::mesh::Library::default(), mesh_hover: None, glyphs: Default::default(), prep: Default::default(), move_over: None, particle_gpu: false, motes: vec![], shed_at: HashMap::default(), shed_owed: HashMap::default(), field_marks: HashMap::default(), seen: HashMap::default(), outlines: HashMap::default(), pens_told: HashMap::default(), pens_found: vec![], decodes: HashMap::default(), decode_last: HashMap::default(), last_morph: None, left: Default::default(), queued: vec![], flushing: false, coalesce: false, defer: 0, stale_layout: false, stale_from: None, wheel_latch: None, laid: (0, None), stale_paint: false, fill_state: None, motes_made: 0,
+            fmap: crate::fieldmap::FieldMap::default(), stirr_at: HashMap::default(), fmap_size: (0.0, 0.0), fmap_ink: u64::MAX, fmap_inks: HashMap::default(), strand_faded: HashMap::default(), strand_cache: HashMap::default(), strand_hold: HashMap::default(), strand_drawn: vec![], trace_drawn: vec![], leaders: vec![], echoes: HashMap::default(), echo_at: f32::NEG_INFINITY, frozen: None, trace_head: HashMap::default(),
         };
         ui.resize(w, h, scale);
         ui
@@ -1536,14 +1537,14 @@ impl<S, M: Clone> Ui<S, M> {
             parts.reverse();
             parts.join(" › ")
         };
-        let mut first: HashMap<&str, usize> = HashMap::new();
+        let mut first: HashMap<&str, usize> = HashMap::default();
         for (i, n) in self.nodes.iter().enumerate() {
             match first.get(n.key.as_str()) {
                 Some(&j) => out.push(P::DuplicateKey { key: n.key.clone(), first: path(j), second: path(i) }),
                 None => { first.insert(&n.key, i); }
             }
         }
-        let mut flows: HashMap<&str, usize> = HashMap::new();
+        let mut flows: HashMap<&str, usize> = HashMap::default();
         for (i, n) in self.nodes.iter().enumerate() {
             if let Some((f, root)) = &n.flow && *root == i {
                 match flows.get(&**f) {
@@ -1582,9 +1583,9 @@ impl<S, M: Clone> Ui<S, M> {
         // A ramp from one hue to another that is not over a picture keeps its first hue all the way.
         let pictures: Vec<[f32; 4]> = self.base[..self.page_len].iter().filter(|q| q.paint[3] == PICTURE && q.extra[0] <= 0.5)
             .map(|q| [q.rect[0].max(q.clip[0]), q.rect[1].max(q.clip[1]), (q.rect[0] + q.rect[2]).min(q.clip[2]), (q.rect[1] + q.rect[3]).min(q.clip[3])]).collect();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         // A drawing's own colours (`Drawing::palette`) off a picture are hue 0 there.
-        let mut own = HashSet::new();
+        let mut own = HashSet::default();
         for (i, q) in self.base[..self.page_len].iter().enumerate() {
             let own_hue = q.paint[3] == SHAPE && q.paint[1] > 0.0 && q.look[1] > 2.5;
             let ramp = q.paint[3] == SHAPE && q.uv[2] < -0.5 && ramp_hues(q);
@@ -1639,6 +1640,7 @@ impl<S, M: Clone> Ui<S, M> {
         if wanted && let Some(t) = self.paced_until(now) { return Some(t); }
         if self.dirty || self.clearing || self.owed || self.stage_due() || self.prep.pending() || self.held(now) || self.moving_at(b) || (self.sweeping && !self.arriving.is_empty()) || !self.kept_flips.is_empty() || !self.queued.is_empty() { return Some(now); }
         let soft = self.soft_wake().map(|w| w.max(now));
+        // The mirror's places, owed while a scroll went on, once it rests.
         if self.plates_ageing() { return Some((self.plate_frame + PLATE_FRAME).max(now).min(soft.unwrap_or(f32::MAX))); }
         // A wake on the beat clock is that much later on the runtime's.
         [self.wake_at(b).map(|w| (w + now - b).max(now)), self.stage_wake().map(|w| (w + now - b).max(now)), soft].into_iter().flatten().reduce(f32::min)
@@ -1747,7 +1749,7 @@ impl<S, M: Clone> Ui<S, M> {
     /// is there; a slot whose element has gone is emptied; beyond four plates, or twice the window's
     /// area, an element is drawn as a plain one (`Ui::problems`).
     fn plate_plan(&mut self) -> HashMap<usize, u8> {
-        let mut out = HashMap::new();
+        let mut out = HashMap::default();
         self.plate_over.clear();
         let window = Rect::new(0.0, 0.0, self.size.0, self.size.1);
         let mut area = 0.0;
@@ -1814,7 +1816,7 @@ impl<S, M: Clone> Ui<S, M> {
     fn keep_sig(&self, root: usize, ctx: impl std::hash::Hash, pull: &[f32], ro: &HashMap<usize, (usize, usize)>) -> Option<u64> {
         use std::hash::{Hash, Hasher};
         if self.run.is_some() || !self.flows.is_empty() || self.sweeping || !self.swept_nodes.is_empty() || self.remeasure || !self.came.is_empty() || !self.arriving.is_empty() { return None; }
-        let mut h = std::hash::DefaultHasher::new();
+        let mut h = crate::fasthash::FastHasher::new();
         ctx.hash(&mut h);
         self.faces_added.hash(&mut h);
         self.no_recompose.hash(&mut h);
@@ -1860,7 +1862,7 @@ impl<S, M: Clone> Ui<S, M> {
             let (a, b) = (start as usize, self.scene.instances.len());
             if b > a {
                 use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
+                let mut h = crate::fasthash::FastHasher::new();
                 bytemuck::cast_slice::<Instance, u8>(&self.scene.instances[a..b]).hash(&mut h);
                 let sig = h.finish();
                 let k = slot as usize;
@@ -2721,7 +2723,7 @@ impl<S, M: Clone> Ui<S, M> {
         let mut ops = vec![];
         let keys: HashSet<&str> = now.iter().map(|n| n.key.as_str()).collect();
         for k in self.a11y_sent.keys() { if !keys.contains(k.as_str()) { ops.push(A11yOp::Remove(k.clone())); } }
-        let mut sent = HashMap::with_capacity(now.len());
+        let mut sent = HashMap::with_capacity_and_hasher(now.len(), Default::default());
         for n in now {
             if self.a11y_sent.get(&n.key) != Some(&n) { ops.push(A11yOp::Set(n.clone())); }
             sent.insert(n.key.clone(), n);
@@ -2871,7 +2873,7 @@ impl<S, M: Clone> Ui<S, M> {
     }
     /// The read-only selection now: the byte range selected in each selectable text node it spans.
     fn sel_ranges(&self) -> HashMap<usize, (usize, usize)> {
-        let mut out = HashMap::new();
+        let mut out = HashMap::default();
         let Some(((ka, a), (kb, b))) = &self.sel else { return out };
         let pos = |k: &str| self.nodes.iter().position(|n| n.key == k);
         let (Some(ia), Some(ib)) = (pos(ka), pos(kb)) else { return out };
@@ -3419,7 +3421,7 @@ impl<S, M: Clone> Ui<S, M> {
         }
         // Virtual lists build the rows their viewport shows, at their scroll offset (the viewport as it
         // was last laid out; the window's height the first time).
-        let mut vx = VirtCtx { scroll: &self.scroll, views: &self.virt_views, window: self.size.1, made: HashMap::new() };
+        let mut vx = VirtCtx { scroll: &self.scroll, views: &self.virt_views, window: self.size.1, made: HashMap::default() };
         let mut built = Built::default();
         self.root_roles.set(el.props.fonts.unwrap_or([0; 3]));
         flatten(el, None, "root".into(), [0; 3], (false, false), None, Inherit { roles: self.timing.roles, ..Inherit::default() }, &mut vx, &mut built, &mut nodes);
@@ -3432,8 +3434,8 @@ impl<S, M: Clone> Ui<S, M> {
         // node's children have their taffy nodes already.
         let mut changed = false;
         let mut touched = 0usize;
-        let mut used: HashSet<NodeId> = HashSet::with_capacity(nodes.len());
-        let mut tids: HashMap<String, NodeId> = HashMap::with_capacity(nodes.len());
+        let mut used: HashSet<NodeId> = HashSet::with_capacity_and_hasher(nodes.len(), Default::default());
+        let mut tids: HashMap<String, NodeId> = HashMap::with_capacity_and_hasher(nodes.len(), Default::default());
         for i in (0..nodes.len()).rev() {
             let was = std::mem::replace(&mut changed, false);
             let leaf = !matches!(nodes[i].content, Content::None);
@@ -3471,7 +3473,7 @@ impl<S, M: Clone> Ui<S, M> {
         // the new parent is set), so the going nodes first drop the children that stay, and the parents
         // that hold those are set again.
         let gone: Vec<NodeId> = self.tids.drain().map(|(_, t)| t).filter(|t| !used.contains(t)).collect();
-        let mut moved: HashSet<NodeId> = HashSet::new();
+        let mut moved: HashSet<NodeId> = HashSet::default();
         for &t in &gone {
             let kids = self.tree.children(t).unwrap_or_default();
             if kids.iter().any(|k| used.contains(k)) {
@@ -3943,13 +3945,13 @@ impl<S, M: Clone> Ui<S, M> {
             [x0, y0, x1 - x0, y1 - y0]
         };
         let (mut births, mut text_births): (HashMap<u64, f32>, HashMap<u64, f32>) = if kept.is_some() { (self.births.clone(), self.text_births.clone()) }
-            else { (HashMap::with_capacity(self.births.len()), HashMap::with_capacity(self.text_births.len())) };
+            else { (HashMap::with_capacity_and_hasher(self.births.len(), Default::default()), HashMap::with_capacity_and_hasher(self.text_births.len(), Default::default())) };
         if kept.is_none() { self.field.wipe = [0.0; 4]; }
         // What the stages drawn again had is found again as a whole paint finds it (from the last frame).
         if let Some(k) = &kept {
             for (j, id) in &k.owners { if k.has(&self.nodes, *j) { births.remove(id); } }
             for (j, n) in self.nodes.iter().enumerate() {
-                if k.has(&self.nodes, j) { use std::hash::{Hash, Hasher}; let mut h = std::hash::DefaultHasher::new(); n.key.hash(&mut h); text_births.remove(&h.finish()); }
+                if k.has(&self.nodes, j) { use std::hash::{Hash, Hasher}; let mut h = crate::fasthash::FastHasher::new(); n.key.hash(&mut h); text_births.remove(&h.finish()); }
             }
         }
         self.field.calm = [[0.0; 4]; 4];
@@ -3983,12 +3985,12 @@ impl<S, M: Clone> Ui<S, M> {
             Some((_, b)) if b.is_some_and(|b| within(nodes, i, b)) => 2,
             _ => 0,
         }).collect();
-        let mut counters: HashMap<usize, [u32; 2]> = HashMap::new();
+        let mut counters: HashMap<usize, [u32; 2]> = HashMap::default();
         let (mut latest, mut any_loose) = (f32::NEG_INFINITY, false);
         let global = self.timing.material;
         let mut caret_found: Option<(usize, [f32; 4])> = kept.as_ref().and(self.caret).filter(|c| kept.as_ref().is_some_and(|k| !k.has(&self.nodes, c.0))).map(|(i, _, r)| (i, r));
         let mut jobs: Vec<RecJob> = vec![];
-        let mut seen_recs: HashSet<String> = if kept.is_some() { self.recs.keys().cloned().collect() } else { HashSet::new() };
+        let mut seen_recs: HashSet<String> = if kept.is_some() { self.recs.keys().cloned().collect() } else { HashSet::default() };
         let ro = self.sel_ranges();
         // A scroll node pulled past its end: what is near that edge loosens, the more the further it is
         // pulled (no box moves past the end).
@@ -4185,7 +4187,7 @@ impl<S, M: Clone> Ui<S, M> {
             let mat = n.mat;
             let dim = if n.disabled { 0.4 } else { 1.0 } * fade;
             let mut sink = Sink { scene: &mut self.scene, owners: &mut self.owners, tags: &mut self.tags, unseen: &mut self.unseen, counters: &mut counters, latest: &mut latest, loose: &mut any_loose };
-            let nk = { use std::hash::{Hash, Hasher}; let mut h = std::hash::DefaultHasher::new(); n.key.hash(&mut h); h.finish() };
+            let nk = { use std::hash::{Hash, Hasher}; let mut h = crate::fasthash::FastHasher::new(); n.key.hash(&mut h); h.finish() };
             let text_born = self.text_births.get(&nk).copied();
             // A drawing's marks, and ink on a plate (`El::plate`: what is drawn is there at once).
             let drawn = matches!(n.content, Content::Canvas(_)) || plate.is_some();
@@ -4609,7 +4611,7 @@ impl<S, M: Clone> Ui<S, M> {
         let size = (root + 1..self.nodes.len()).take_while(|&j| within(&self.nodes, j, root)).count() + 1;
         let keys: Vec<(u64, &str)> = (root..root + size).map(|j| {
             use std::hash::{Hash, Hasher};
-            let mut h = std::hash::DefaultHasher::new();
+            let mut h = crate::fasthash::FastHasher::new();
             self.nodes[j].key.hash(&mut h);
             (h.finish(), self.nodes[j].key.as_str())
         }).collect();
@@ -4720,7 +4722,7 @@ impl<S, M: Clone> Ui<S, M> {
         let mut nodes = std::mem::take(&mut self.nodes);
         let mut tail = nodes.split_off(i);
         let mut built = Built { base: i, ..Built::default() };
-        let mut vx = VirtCtx { scroll: &self.scroll, views: &self.virt_views, window: self.size.1, made: HashMap::new() };
+        let mut vx = VirtCtx { scroll: &self.scroll, views: &self.virt_views, window: self.size.1, made: HashMap::default() };
         flatten(el, ctx.parent, ctx.path, ctx.roles, ctx.off, ctx.flow, ctx.inh, &mut vx, &mut built, &mut nodes);
         self.stack_margins(&nodes, &mut built);
         let virt = !vx.made.is_empty();
@@ -4881,7 +4883,7 @@ impl<S, M: Clone> Ui<S, M> {
         let ink = |i: &Instance| if i.paint[3] == GLYPH { [i.rect[0] + sp, i.rect[1] + sp, i.rect[0] + i.rect[2] - sp, i.rect[1] + i.rect[3] - sp] } else { [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]] };
         let mut under: Vec<(usize, [f32; 4])> = vec![];
         let mut out = vec![];
-        let mut size_of: HashMap<usize, f32> = HashMap::new();
+        let mut size_of: HashMap<usize, f32> = HashMap::default();
         // The ink drawn before, by cell of a coarse grid over the window (each box in every cell it
         // touches, a cell index held to the grid's edge, which keeps two boxes that overlap in a cell they
         // share), so a legible instance tests only what is near it. A box that is not finite is in a
@@ -4967,8 +4969,8 @@ impl<S, M: Clone> Ui<S, M> {
     fn islands(&self, walk: bool) -> Vec<Instance> {
         let s = self.scale;
         let sp = crate::text::SPREAD as f32;
-        let mut boxes: HashMap<usize, [f32; 4]> = HashMap::new();
-        let mut memo: HashMap<usize, Option<usize>> = HashMap::new();
+        let mut boxes: HashMap<usize, [f32; 4]> = HashMap::default();
+        let mut memo: HashMap<usize, Option<usize>> = HashMap::default();
         for (k, inst) in self.scene.instances.iter().enumerate() {
             let Some(&(ni, _)) = self.owners.get(k) else { break };
             if inst.paint[2] <= 0.0 { continue; }
@@ -5006,7 +5008,7 @@ impl<S, M: Clone> Ui<S, M> {
         // Decodes turned off (DESIGN.md §1.34): the text is there as it ends.
         if self.timing.off.decode { self.decodes.clear(); self.decode_last.clear(); return; }
         let (now, s) = (self.clock, self.scale);
-        let mut present: HashMap<String, Shown> = HashMap::new();
+        let mut present: HashMap<String, Shown> = HashMap::default();
         for i in 0..self.nodes.len() {
             let Some(spec) = &self.nodes[i].decode else { continue };
             if self.nodes[i].hidden { continue; }
@@ -5204,14 +5206,14 @@ impl<S, M: Clone> Ui<S, M> {
         let m = &self.fmap;
         let (s, c) = (self.scale, m.cell);
         let mut ink = vec![0.0f32; m.cols * m.rows];
-        let mut kept: HashMap<u64, Vec<(u32, f32)>> = HashMap::with_capacity(self.fmap_inks.len());
+        let mut kept: HashMap<u64, Vec<(u32, f32)>> = HashMap::with_capacity_and_hasher(self.fmap_inks.len(), Default::default());
         let atlas = self.text.pixels.len();
         for inst in self.scene.instances[..self.page_len.min(self.scene.instances.len())].iter().filter(|i| i.look[2] > 0.5 && i.paint[2] > 0.01) {
             let b = inst.bounds(0.0);
             // A blade is worked out on the GPU (its rect is only where it can reach); nothing creeps in
             // a box with lives of its own, so what lies all inside one is not read.
             if inst.blade() || m.lives.iter().any(|(l, _, _)| b[0] / s >= l[0] && b[1] / s >= l[1] && b[2] / s <= l[2] && b[3] / s <= l[3]) { continue; }
-            let mut h = std::hash::DefaultHasher::new();
+            let mut h = crate::fasthash::FastHasher::new();
             for v in inst.rect.iter().chain(&inst.uv).chain(&inst.paint).chain(&inst.clip).chain(&inst.xf).chain(&inst.extra[..1]) { v.to_bits().hash(&mut h); }
             atlas.hash(&mut h);
             let key = h.finish();
@@ -5476,7 +5478,7 @@ impl<S, M: Clone> Ui<S, M> {
                         }
                         inst.rect[0] += off[0];
                         inst.rect[1] += off[1];
-                        let key = { use std::hash::{Hash, Hasher}; let mut h = std::hash::DefaultHasher::new(); for v in inst.uv.iter().chain(&inst.rect[2..]).chain(&inst.xf) { v.to_bits().hash(&mut h); } g.to_bits().hash(&mut h); h.finish() };
+                        let key = { use std::hash::{Hash, Hasher}; let mut h = crate::fasthash::FastHasher::new(); for v in inst.uv.iter().chain(&inst.rect[2..]).chain(&inst.xf) { v.to_bits().hash(&mut h); } g.to_bits().hash(&mut h); h.finish() };
                         let rel = self.strand_cache.entry(key).or_insert_with(|| {
                             let mut at = inst;
                             at.rect[0] = 0.0; at.rect[1] = 0.0;
@@ -5605,7 +5607,7 @@ impl<S, M: Clone> Ui<S, M> {
             let v = v.unwrap_or(0);
             match views.iter_mut().find(|x| x.0 == v) { Some(x) => x.1.push(i), None => views.push((v, vec![i])) }
         }
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut ops: Vec<(usize, f32)> = vec![];
         for (v, mut labels) in views {
             if labels.len() > MOST { self.clear_many.push((self.nodes[v].key.clone(), labels.len())); }
@@ -5821,7 +5823,7 @@ impl<S, M: Clone> Ui<S, M> {
     /// glyph's without the spread round it, within its clip), device px `[x0, y0, x1, y1]`.
     fn legible_ink(&self) -> Vec<[f32; 4]> {
         let (s, spread) = (self.scale, crate::text::SPREAD as f32);
-        let mut ink: HashMap<usize, [f32; 4]> = HashMap::new();
+        let mut ink: HashMap<usize, [f32; 4]> = HashMap::default();
         for (i, inst) in self.scene.instances[..self.page_len.min(self.owners.len())].iter().enumerate() {
             let ni = self.owners[i].0;
             let n = &self.nodes[ni];
@@ -6299,9 +6301,9 @@ impl<S, M: Clone> Ui<S, M> {
         let mut used = vec![false; old.len()];
         let shows = |r: [f32; 4], c: [f32; 4]| [r[0].max(c[0]), r[1].max(c[1]), (r[0] + r[2]).min(c[2]), (r[1] + r[3]).min(c[3])];
         // The growing subtrees: by flow, the first picture of each on the old page and on the new.
-        let mut grow_of: HashMap<Rc<str>, usize> = HashMap::new();
+        let mut grow_of: HashMap<Rc<str>, usize> = HashMap::default();
         if flight > 0.0 {
-            let mut first_old: HashMap<Rc<str>, usize> = HashMap::new();
+            let mut first_old: HashMap<Rc<str>, usize> = HashMap::default();
             for (k, o) in old.iter().enumerate() {
                 // A picture, not the cells that read one (`el::cells`, a picture instance with its ramp in extra.x).
                 // (One keyed the same on both pages is the same picture, and grows when its box changes.)
@@ -6333,7 +6335,7 @@ impl<S, M: Clone> Ui<S, M> {
         self.flow_own.clear();
         if !grow_of.is_empty() {
             // The old page's keyed instances in growing subtrees, by key.
-            let mut by_key: HashMap<String, Vec<usize>> = HashMap::new();
+            let mut by_key: HashMap<String, Vec<usize>> = HashMap::default();
             for (k, o) in old.iter().enumerate() {
                 if let Some(key) = o.key.as_deref() && !used[k] && grows(&o.tag) { by_key.entry(key.to_owned()).or_default().push(k); }
             }
@@ -6369,7 +6371,7 @@ impl<S, M: Clone> Ui<S, M> {
             }
         }
         // With no flight (`flow_ms` 0) nothing is shared: the old page fades out and the new in.
-        let by_tag: HashMap<&Tag, usize> = if flight <= 0.0 { HashMap::new() } else { old.iter().enumerate().filter(|(k, o)| !used[*k] && !new_ids.contains(&o.id) && !grows(&o.tag)).filter_map(|(k, o)| o.tag.as_ref().map(|t| (t, k))).collect() };
+        let by_tag: HashMap<&Tag, usize> = if flight <= 0.0 { HashMap::default() } else { old.iter().enumerate().filter(|(k, o)| !used[*k] && !new_ids.contains(&o.id) && !grows(&o.tag)).filter_map(|(k, o)| o.tag.as_ref().map(|t| (t, k))).collect() };
         for i in 0..self.page_len {
             let id = self.owners[i].1;
             if old_ids.contains(&id) || self.flows.contains_key(&id) || grows(&self.tags[i]) { continue; }
@@ -6428,7 +6430,7 @@ impl<S, M: Clone> Ui<S, M> {
         fn root(p: &mut [usize], mut i: usize) -> usize { while p[i] != i { p[i] = p[p[i]]; i = p[i]; } i }
         // By what each covers, turned (a drawing's strokes are), as (x0, y0, x1, y1).
         let touch = |a: [f32; 4], b: [f32; 4]| a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
-        let mut by_node: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+        let mut by_node: HashMap<(usize, usize), Vec<usize>> = HashMap::default();
         // (What is scaled with the view goes with the picture's transform instance by instance.)
         for (j, (k, g)) in going.iter().enumerate() { if let Some(r) = g.ride && !g.scaled { by_node.entry((old[*k].node, r)).or_default().push(j); } }
         for js in by_node.values() {
@@ -6437,7 +6439,7 @@ impl<S, M: Clone> Ui<S, M> {
                 if (gx.paint[3] == GLYPH && gy.paint[3] == GLYPH) || touch(gx.bounds(0.5), gy.bounds(0.5)) { let (rx, ry) = (root(&mut part, x), root(&mut part, y)); part[rx] = ry; }
             } }
         }
-        let mut boxes: HashMap<usize, [f32; 4]> = HashMap::new();
+        let mut boxes: HashMap<usize, [f32; 4]> = HashMap::default();
         for (j, (_, g)) in going.iter().enumerate() {
             let (r, b) = (root(&mut part, j), g.inst.bounds(0.0));
             let e = boxes.entry(r).or_insert(b);

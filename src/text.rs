@@ -13,7 +13,7 @@ use parley::fontique::{Blob, Collection, CollectionOptions};
 use parley::layout::PositionedLayoutItem;
 use parley::style::{FontFamily, FontFamilyName, StyleProperty};
 use parley::{FontContext, Layout, LayoutContext, LineHeight};
-use std::collections::HashMap;
+use crate::fasthash::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
@@ -290,8 +290,8 @@ impl Text {
         }).collect();
         Self {
             fonts: FontContext { collection, source_cache: Default::default() },
-            layouts: LayoutContext::new(), scaler: ScaleContext::new(), dots: HashMap::new(), families, scale: 1.0,
-            slots: HashMap::new(), ramps: HashMap::new(), full: false, measured: HashMap::new(), cache: [HashMap::new(), HashMap::new()], pieces: [HashMap::new(), HashMap::new()], reveals: 0, pixels: vec![0; (ATLAS * ATLAS * 2) as usize], dirty: WHOLE, pen: (1, 1, 0), shaped: 0, shape_ms: 0.0, log_shapes: false, shape_log: vec![], asked: Default::default(),
+            layouts: LayoutContext::new(), scaler: ScaleContext::new(), dots: HashMap::default(), families, scale: 1.0,
+            slots: HashMap::default(), ramps: HashMap::default(), full: false, measured: HashMap::default(), cache: [HashMap::default(), HashMap::default()], pieces: [HashMap::default(), HashMap::default()], reveals: 0, pixels: vec![0; (ATLAS * ATLAS * 2) as usize], dirty: WHOLE, pen: (1, 1, 0), shaped: 0, shape_ms: 0.0, log_shapes: false, shape_log: vec![], asked: Default::default(),
         }
     }
 
@@ -369,7 +369,7 @@ impl Text {
         let i = match at { Some(i) => { self.families[i as usize] = f; i } None => { self.families.push(f); (self.families.len() - 1) as u8 } };
         self.asked.remove(&i);
         self.measured.clear();
-        self.cache = [HashMap::new(), HashMap::new()];
+        self.cache = [HashMap::default(), HashMap::default()];
         Ok(i)
     }
     /// Start a layout pass: what is asked for from now on is what the page uses.
@@ -380,7 +380,7 @@ impl Text {
 
     /// Device px per logical px (pixel faces snap in device px); a change empties the layout cache.
     pub fn set_scale(&mut self, scale: f32) {
-        if scale != self.scale { self.scale = scale; self.measured.clear(); self.cache = [HashMap::new(), HashMap::new()]; self.pieces = [HashMap::new(), HashMap::new()]; }
+        if scale != self.scale { self.scale = scale; self.measured.clear(); self.cache = [HashMap::default(), HashMap::default()]; self.pieces = [HashMap::default(), HashMap::default()]; }
     }
 
     /// The logical size a face is really drawn at: pixel faces go to the nearest whole multiple of their
