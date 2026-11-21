@@ -2202,7 +2202,10 @@ the size, the materials or the dottr ground clock changing; soft scrolling; the 
 refusal of `scroll_move`, `dirty::Parts::refused`: the viewport changed, a jump past it, the trace turned, glitchr
 or a material from source, the latch switching, not alone, half a row); `spec yes` with the
 material, or `no` with why (an override, a material from source, still counting, off); the share of the frame
-shaded at full resolution (the shade boxes); and the soft, stage and reduced scales. `tests/scroll_move.rs` checks it
+shaded at full resolution (the shade boxes), with the three reasons whose boxes cover the most of it (`FramePath::shade_why`,
+each a share of the window summed before the boxes merge, so they may overlap: what changed, the band a move scrolled in,
+the scroll areas, the lens, the field map, the marks, a lattice other than the frame's, a picture given, a plate's
+view, a stage moved or rescaled); and the soft, stage and reduced scales. `tests/scroll_move.rs` checks it
 against what the renderer counted.
 
 **What pointer movement costs**: moving the pointer neither lays out nor shapes text. Parallax uses

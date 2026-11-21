@@ -58,6 +58,9 @@ fn a_slow_scroll_shades_only_the_band_it_brings_in_and_draws_the_frame_drawn_who
                 if c.moved == 0 { continue; }
                 moved += 1;
                 assert!((path.shade - c.material as f32 / (w * h) as f32).abs() < 1e-3, "{mat:?} frame {f}: the readout's shade share: {}", path.line());
+                // What put the boxes there: the band scrolled in among the three largest, none above the share.
+                assert!(path.shade_why.iter().any(|w| w.0 == "band" && w.1 > 0.0), "{mat:?} frame {f}: the band is a reason: {}", path.line());
+                assert!(path.shade_why.windows(2).all(|p| p[0].1 >= p[1].1) && path.line().contains("% (") , "{mat:?} frame {f}: {}", path.line());
                 // The band is 6 px of the list's height. The strips along the viewport's edges that the
                 // material reads across (up to 12 px a side for dottr), the bar's spill and the scroll bar
                 // are a fixed cost, large in a window this small: under half of it here, about a sixth of
@@ -156,6 +159,9 @@ fn a_fast_scroll_over_stages_at_their_own_scale_moves_the_last_frame() {
             assert_eq!(diff, 0, "{mat:?} frame {f}: {diff} bytes differ from the frame drawn whole ({})", u.perf().path.line());
             assert!(u.perf().path.stage < 1.0, "{mat:?} frame {f}: the stages are at their own scale ({})", u.perf().path.line());
             if part.r.cost.trace > 0 { traced += 1; }
+            // A move shades the stages in the viewport again (the reduced grid stays with the window).
+            let path = u.perf().path;
+            if path.moved { assert!(path.shade_why.iter().any(|w| w.0 == "stage moved"), "{mat:?} frame {f}: {}", path.line()); }
         }
         assert_eq!(part.r.specialised(), Some(mat.id()), "{mat:?}: drawn with its own passes");
         assert!(traced >= 8, "{mat:?}: only {traced} of 30 frames moved the last frame with the trace showing ({})", u.perf().path.line());

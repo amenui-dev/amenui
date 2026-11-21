@@ -1454,7 +1454,7 @@ impl Renderer {
         // A new stage scale (the governor stepped) shades the stages again, every one, and nothing else.
         if let Some(p) = parts.as_mut() && let Some(v) = if rescaled { Some([0.0, 0.0, self.size.0 as f32, self.size.1 as f32]) } else { p.moved.filter(|_| staged).map(|m| m.bx()) } {
             let mut s2 = std::mem::take(&mut p.stage2);
-            for st in &ui.scene().stages { let r = crate::dirty::meet(crate::dirty::grow(st.rect, 2.0), v); if !crate::dirty::is_empty(r) { s2.push(r); } }
+            for st in &ui.scene().stages { let r = crate::dirty::meet(crate::dirty::grow(st.rect, 2.0), v); if !crate::dirty::is_empty(r) { s2.push(r); crate::dirty::why_add(&mut p.why, if rescaled { "stage scale" } else { "stage moved" }, r); } }
             p.stage2 = crate::dirty::merge(s2, crate::dirty::MAX_SHADE_BOXES);
         }
         // A picture given since the last frame (it was drawn blank, or as it was): drawn again where it is,
@@ -1467,6 +1467,7 @@ impl Renderer {
                 .map(|i| crate::dirty::meet(i.bounds(pad), screen)).filter(|b| !crate::dirty::is_empty(*b)).collect();
             if !at.is_empty() {
                 p.stage1 = crate::dirty::merge(p.stage1.iter().copied().chain(at.iter().copied()).collect(), crate::dirty::MAX_BOXES);
+                for b in &at { crate::dirty::why_add(&mut p.why, "picture", *b); }
                 p.stage2 = crate::dirty::merge(p.stage2.iter().copied().chain(at).collect(), crate::dirty::MAX_SHADE_BOXES);
             }
         }
@@ -1475,7 +1476,8 @@ impl Renderer {
         self.plate_moves = [false; 4];
         if let Some(p) = parts.as_mut() && let Err(w) = self.plates_partial(ui.scene(), p) { parts = None; why = w; }
         self.region = parts.as_ref().map_or(crate::dirty::Region::All, |p| p.region());
-        self.path = crate::perf::FramePath { moved: parts.as_ref().is_some_and(|p| p.moved.is_some()), why, soft: if soft { q } else { 1.0 }, stage: if staged { qs } else { 1.0 }, reduced: lo.map_or(1.0, |l| l[1]), ..Default::default() };
+        let shade_why = parts.as_ref().map_or(Default::default(), |p| crate::perf::top_why(&p.why, (self.size.0 * self.size.1) as f32));
+        self.path = crate::perf::FramePath { shade_why, moved: parts.as_ref().is_some_and(|p| p.moved.is_some()), why, soft: if soft { q } else { 1.0 }, stage: if staged { qs } else { 1.0 }, reduced: lo.map_or(1.0, |l| l[1]), ..Default::default() };
         self.parts = parts;
         self.frame_q(target, Frame { scene: ui.scene(), field: ui.field(), look, lib: ui.meshes(), scale, t: now, mt, split, tiles, grid }, true, lo);
         let submit = (crate::perf::now_ms() - started) as f32;
@@ -1701,6 +1703,7 @@ impl Renderer {
         }
         if !shown.is_empty() {
             p.stage1 = crate::dirty::merge(p.stage1.iter().copied().chain(shown.iter().copied()).collect(), crate::dirty::MAX_BOXES);
+            for b in &shown { crate::dirty::why_add(&mut p.why, "plate view", *b); }
             p.stage2 = crate::dirty::merge(p.stage2.iter().copied().chain(shown).collect(), crate::dirty::MAX_SHADE_BOXES);
         }
         Ok(())

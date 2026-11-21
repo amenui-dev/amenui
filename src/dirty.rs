@@ -87,6 +87,15 @@ pub struct Parts {
     /// Why a scroll node whose content moved was not moved as a frame (`scroll_move`), for the readout;
     /// empty when one was or none moved.
     pub refused: &'static str,
+    /// What put stage 2's boxes there, with the pixels of its boxes (summed, before they are merged; boxes
+    /// of one reason may overlap): for the readout (`perf::FramePath::shade_why`).
+    pub why: Vec<(&'static str, f32)>,
+}
+/// Add `b`'s pixels to reason `w` (`Parts::why`).
+pub fn why_add(why: &mut Vec<(&'static str, f32)>, w: &'static str, b: Bx) {
+    if is_empty(b) { return; }
+    let a = (b[2] - b[0]) * (b[3] - b[1]);
+    match why.iter_mut().find(|x| x.0 == w) { Some(x) => x.1 += a, None => why.push((w, a)) }
 }
 
 /// A scroll node's viewport (x0, y0, x1, y1, whole device px) whose content moved by `d` device px:
@@ -428,7 +437,8 @@ pub fn parts_why(prev: &Inputs, cur: &Inputs, scale: f32) -> Result<Parts, &'sta
     let look = &cur.look;
     let pad = SPREAD as f32 + look.fx.push * s * 1.5 + 2.0;
     let mut st1: Vec<Bx> = vec![];
-    let mut st2: Vec<Bx> = vec![];
+    // Stage 2's boxes, each with what put it there (`Parts::why`).
+    let mut st2: Vec<(&'static str, Bx)> = vec![];
     let (mv, refused, others) = scroll_move(prev, cur, &mats, s);
     // A box of the last final frame, and where the move took what was in it.
     let old = |b: Bx| [b, mv.map_or(EMPTY, |(_, m)| m.carry_frame(b))];
@@ -539,13 +549,13 @@ pub fn parts_why(prev: &Inputs, cur: &Inputs, scale: f32) -> Result<Parts, &'sta
     let rch = mats.iter().map(|m| reach(*m, look, s)).fold(0.0, f32::max)
         + if pic_changed { look.pics.iter().map(|p| 2.0 * p.pitch * s + p.depth * s).fold(0.0, f32::max) } else { 0.0 }
         + mv.map_or(0.0, |(_, m)| m.latch);
-    st2.extend(changed1.iter().map(|x| grow(*x, rch)));
-    for f in &acting { st2.push(grow(*f, rch)); }
+    st2.extend(changed1.iter().map(|x| ("changed", grow(*x, rch))));
+    for f in &acting { st2.push(("fronts", grow(*f, rch))); }
     // The lens acts on the pictures and 3D elements that let it (above) and on the dot ground.
-    if mats.contains(&Material::Dottr) { st2.push(grow(lenses, rch)); }
-    st2.push(grow(bursts, rch));
+    if mats.contains(&Material::Dottr) { st2.push(("lens", grow(lenses, rch))); }
+    st2.push(("burst", grow(bursts, rch)));
     // The ground under the field map (dot's units lean up to half their pitch, glitch's rows slip).
-    if let Some(mb) = map_box { st2.push(grow(mb, rch + 9.0 * s)); }
+    if let Some(mb) = map_box { st2.push(("field map", grow(mb, rch + 9.0 * s))); }
     // Scroll nodes whose content moved (the lattices follow it) or whose trace shows (DESIGN.md §1.8.3).
     // A move draws its band and edges instead (above, and here as far as the material reads).
     for j in 0..8 {
@@ -553,7 +563,7 @@ pub fn parts_why(prev: &Inputs, cur: &Inputs, scale: f32) -> Result<Parts, &'sta
         for (n, f) in [&prev.field, &cur.field].into_iter().enumerate() {
             if prev.field.scrolls[j] != cur.field.scrolls[j] || prev.field.scrollo[j] != cur.field.scrollo[j] || f.scrollo[j][2] > 0.0 {
                 let r = grow(f.scrolls[j], rch + look.scroll.trail * s + look.scroll.slip * s);
-                if f.scrolls[j][2] > f.scrolls[j][0] { st2.extend(if n == 0 { old(r) } else { [r, EMPTY] }); }
+                if f.scrolls[j][2] > f.scrolls[j][0] { st2.extend(if n == 0 { old(r) } else { [r, EMPTY] }.map(|b| ("scroll", b))); }
             }
         }
     }
@@ -561,34 +571,36 @@ pub fn parts_why(prev: &Inputs, cur: &Inputs, scale: f32) -> Result<Parts, &'sta
         // The trace reads its ink up to its length off, across the viewport's edges too: there what it
         // read has moved out of sight, or in.
         let r = if m.trace > 0.0 { 2.0 * rch + look.scroll.trail.max(look.scroll.misreg) * s * m.trace } else { rch };
-        st2.extend(m.edges(r, cur.size));
+        st2.extend(m.edges(r, cur.size).map(|b| ("band", b)));
         // What is drawn in another lattice than the frame moved by.
-        st2.extend(others.iter().map(|b| grow(*b, rch)));
-        if m.frame != m.d { st2.extend(Move { d: m.frame, ..m }.edges(r, cur.size)); }
+        st2.extend(others.iter().map(|b| ("lattice", grow(*b, rch))));
+        if m.frame != m.d { st2.extend(Move { d: m.frame, ..m }.edges(r, cur.size).map(|b| ("band", b))); }
     }
     if prev.field.wipe != cur.field.wipe || prev.field.wipe_rect != cur.field.wipe_rect || (mv.is_some() && cur.field.wipe[1] > 0.0) {
-        if prev.field.wipe[1] > 0.0 { st2.extend(old(grow(prev.field.wipe_rect, rch))); }
-        if cur.field.wipe[1] > 0.0 { st2.push(grow(cur.field.wipe_rect, rch)); }
+        if prev.field.wipe[1] > 0.0 { st2.extend(old(grow(prev.field.wipe_rect, rch)).map(|b| ("wipe", b))); }
+        if cur.field.wipe[1] > 0.0 { st2.push(("wipe", grow(cur.field.wipe_rect, rch))); }
     }
     // The annotation layer is drawn over the material in the same pass: the marks that are new or gone
     // (as a set, so a label that grows by a glyph does not move every mark after it in the list).
     // With a move, the last frame's marks as it carried them; those it moved that are not the content's
     // are drawn again where they were and where they went.
     let pa: Vec<Instance> = match mv { Some((_, m)) => prev.annot.iter().map(|i| m.moved(i)).collect(), None => prev.annot.clone() };
-    if let Some((_, m)) = mv { for i in prev.annot.iter().filter(|i| !m.holds(i)) { let r = meet(grow(rect(i.rect), 2.0), m.bx()); if !is_empty(r) { st2.extend([r, m.carry_frame(r)]); } } }
+    if let Some((_, m)) = mv { for i in prev.annot.iter().filter(|i| !m.holds(i)) { let r = meet(grow(rect(i.rect), 2.0), m.bx()); if !is_empty(r) { st2.extend([("marks", r), ("marks", m.carry_frame(r))]); } } }
     // With the trace showing, the renderer shades again where it can reach, marks or not: the marks over
     // the viewport are drawn again (where the frame took the last ones, and where they are).
     if let Some((_, m)) = mv.filter(|(_, m)| m.trace > 0.0 || m.frame != m.d) {
-        for i in &prev.annot { let r = meet(grow(rect(i.rect), 2.0), m.bx()); if !is_empty(r) { st2.push(m.carry_frame(r)); } }
-        for i in &cur.annot { let r = meet(grow(rect(i.rect), 2.0), m.bx()); if !is_empty(r) { st2.push(r); } }
+        for i in &prev.annot { let r = meet(grow(rect(i.rect), 2.0), m.bx()); if !is_empty(r) { st2.push(("marks", m.carry_frame(r))); } }
+        for i in &cur.annot { let r = meet(grow(rect(i.rect), 2.0), m.bx()); if !is_empty(r) { st2.push(("marks", r)); } }
     }
     if pa != cur.annot {
         let key = |i: &Instance| -> Vec<u32> { i.rect.iter().chain(&i.uv).chain(&i.paint).chain(&i.clip).chain(&i.extra).chain(&i.look).map(|v| v.to_bits()).collect() };
         let had: std::collections::HashSet<Vec<u32>> = pa.iter().map(key).collect();
         let has: std::collections::HashSet<Vec<u32>> = cur.annot.iter().map(key).collect();
-        for i in pa.iter().filter(|i| !has.contains(&key(i))).chain(cur.annot.iter().filter(|i| !had.contains(&key(i)))) { st2.push(grow(rect(i.rect), 2.0)); }
+        for i in pa.iter().filter(|i| !has.contains(&key(i))).chain(cur.annot.iter().filter(|i| !had.contains(&key(i)))) { st2.push(("marks", grow(rect(i.rect), 2.0))); }
     }
-    Ok(Parts { stage1: st1, stage2: merge(st2.into_iter().map(|x| meet(x, screen)).collect(), MAX_SHADE_BOXES), moved: mv.map(|(_, m)| m), refused })
+    let mut why = vec![];
+    for (w, b) in &st2 { why_add(&mut why, w, meet(*b, screen)); }
+    Ok(Parts { stage1: st1, stage2: merge(st2.into_iter().map(|x| meet(x.1, screen)).collect(), MAX_SHADE_BOXES), moved: mv.map(|(_, m)| m), refused, why })
 }
 
 /// A box as whole device pixels inside the frame (for a scissor), or `None` when it is empty.

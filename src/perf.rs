@@ -96,15 +96,26 @@ pub struct FramePath {
     pub soft: f32,
     pub stage: f32,
     pub reduced: f32,
+    /// What put a partial frame's shaded boxes there: the three largest reasons, each with its boxes'
+    /// share of the window (summed before they are merged, so they may overlap; `dirty::Parts::why`).
+    pub shade_why: [(&'static str, f32); 3],
 }
-impl Default for FramePath { fn default() -> Self { Self { moved: false, why: "", specialised: None, gated: 0, spec_why: "", shade: 0.0, soft: 1.0, stage: 1.0, reduced: 1.0 } } }
+impl Default for FramePath { fn default() -> Self { Self { moved: false, why: "", specialised: None, gated: 0, spec_why: "", shade: 0.0, soft: 1.0, stage: 1.0, reduced: 1.0, shade_why: [("", 0.0); 3] } } }
+/// The three largest reasons of `why` (pixels each) as shares of `whole` pixels, largest first.
+pub fn top_why(why: &[(&'static str, f32)], whole: f32) -> [(&'static str, f32); 3] {
+    let mut v: Vec<(&'static str, f32)> = why.iter().map(|&(w, a)| (w, (a / whole.max(1.0)).min(1.0))).collect();
+    v.sort_by(|a, b| b.1.total_cmp(&a.1));
+    std::array::from_fn(|k| v.get(k).copied().unwrap_or(("", 0.0)))
+}
 impl FramePath {
-    /// One line: `move no (trace with a reduced pass)  spec no (override)  shade 34%  soft 1  stage 0.75  lo 0.75`.
+    /// One line: `move yes  spec no (override)  shade 34% (band 20%, changed 9%, stage moved 5%)  soft 1  stage 0.75  lo 0.75`.
     pub fn line(&self) -> String {
         let or = |w: &str| if w.is_empty() { String::new() } else { format!(" ({w})") };
         let names = |mask: u16| (0..16u8).filter(|m| mask & (1 << m) != 0).map(|m| crate::style::Material::from_id(m).name()).collect::<Vec<_>>().join("+");
         let spec = match (self.specialised, self.gated) { (Some(m), _) => format!("yes {}", crate::style::Material::from_id(m).name()), (None, g) if g != 0 => format!("each {}", names(g)), _ => format!("no{}", or(self.spec_why)) };
-        format!("move {}  spec {spec}  shade {:.0}%  soft {}  stage {}  lo {}", if self.moved { "yes".to_string() } else { format!("no{}", or(self.why)) }, self.shade * 100.0, self.soft, self.stage, self.reduced)
+        let why: Vec<String> = self.shade_why.iter().filter(|w| !w.0.is_empty()).map(|w| format!("{} {:.0}%", w.0, w.1 * 100.0)).collect();
+        let why = if why.is_empty() { String::new() } else { format!(" ({})", why.join(", ")) };
+        format!("move {}  spec {spec}  shade {:.0}%{why}  soft {}  stage {}  lo {}", if self.moved { "yes".to_string() } else { format!("no{}", or(self.why)) }, self.shade * 100.0, self.soft, self.stage, self.reduced)
     }
 }
 /// The frame period the drop count measures against, ms.

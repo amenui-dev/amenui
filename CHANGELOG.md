@@ -10,6 +10,9 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Faster scrolling, no late stalls
 
+- `FramePath::shade_why`: the three reasons whose boxes cover most of a partial frame's shaded pixels, each as a
+  share of the window, shown after the share in `FramePath::line` (`shade 54% (stage moved 43%, changed 12%, band 6%)`).
+
 - A 3D element supersampled at a whole scale (the card stack, at 2) reads each pixel's texel from the pixel's own
   position, exactly: one driver lost the outline's top row and another its bottom.
 
