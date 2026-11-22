@@ -133,6 +133,9 @@ pub trait Driven {
     /// the ground under the text. `px` is the frame as drawn. A page wrapping a `Ui` forwards to it;
     /// the default finds nothing.
     fn audit(&mut self, _o: &mut Offscreen, _look: &Look, _px: &[u8]) -> Vec<crate::audit::Finding> { vec![] }
+    /// `audit` of a page drawn in `preset`: its rules measured on the same frame too
+    /// (`audit::audit_under`). The default leaves the rules out.
+    fn audit_under(&mut self, o: &mut Offscreen, look: &Look, px: &[u8], _preset: &crate::preset::Preset) -> Vec<crate::audit::Finding> { self.audit(o, look, px) }
 }
 impl<S, M: Clone> Driven for Ui<S, M> {
     fn now(&self) -> f32 { Ui::now(self) }
@@ -154,23 +157,8 @@ impl<S, M: Clone> Driven for Ui<S, M> {
         Ui::command(self, cmd);
         Ok(())
     }
-    fn audit(&mut self, o: &mut Offscreen, look: &Look, px: &[u8]) -> Vec<crate::audit::Finding> {
-        let (partial, hide) = (o.r.partial, o.r.hide_glyphs);
-        o.r.partial = false;
-        let mut frame = |ui: &mut Self, look: &Look, hide: bool| { o.r.hide_glyphs = hide; ui.invalidate(); o.render(ui, look) };
-        let ground = frame(self, look, true);
-        // The same frame in plain (the material alone swapped), for text the material wears away.
-        let plain = (look.material != Material::Plain).then(|| {
-            let p = Look { material: Material::Plain, ..*look };
-            (frame(self, &p, false), frame(self, &p, true))
-        });
-        (o.r.partial, o.r.hide_glyphs) = (partial, hide);
-        self.invalidate();
-        let mut f = crate::audit::audit(self, px, &ground);
-        if let Some((p, pg)) = &plain { f.extend(crate::audit::eroded(self, (px, &ground), (p, pg), look.material.name())); }
-        crate::audit::sort(&mut f);
-        f
-    }
+    fn audit(&mut self, o: &mut Offscreen, look: &Look, px: &[u8]) -> Vec<crate::audit::Finding> { audit_ui(self, o, look, px, None) }
+    fn audit_under(&mut self, o: &mut Offscreen, look: &Look, px: &[u8], preset: &crate::preset::Preset) -> Vec<crate::audit::Finding> { audit_ui(self, o, look, px, Some(preset)) }
     fn apply(&mut self, input: &Input) -> Result<(), DriveError> {
         let at = |ui: &Self, x: &Option<f32>, y: &Option<f32>, target: &Option<String>| -> Result<(f32, f32), DriveError> {
             if let Some(k) = target {
@@ -204,6 +192,26 @@ fn near_keys<S, M: Clone>(ui: &Ui<S, M>, k: &str) -> String {
 
 pub use crate::style::{THEME_IDS, material_named as material, theme_named as theme};
 
+/// `Driven::audit` for a runtime: the frame drawn again with the glyphs hidden (the ground under the
+/// text) and, in another material, in plain (text the material wears away); a preset's rules when given.
+fn audit_ui<S, M: Clone>(ui: &mut Ui<S, M>, o: &mut Offscreen, look: &Look, px: &[u8], preset: Option<&crate::preset::Preset>) -> Vec<crate::audit::Finding> {
+    let (partial, hide) = (o.r.partial, o.r.hide_glyphs);
+    o.r.partial = false;
+    let mut frame = |ui: &mut Ui<S, M>, look: &Look, hide: bool| { o.r.hide_glyphs = hide; ui.invalidate(); o.render(ui, look) };
+    let ground = frame(ui, look, true);
+    // The same frame in plain (the material alone swapped), for text the material wears away.
+    let plain = (look.material != Material::Plain).then(|| {
+        let p = Look { material: Material::Plain, ..*look };
+        (frame(ui, &p, false), frame(ui, &p, true))
+    });
+    (o.r.partial, o.r.hide_glyphs) = (partial, hide);
+    ui.invalidate();
+    let mut f = match preset { Some(p) => crate::audit::audit_under(ui, px, &ground, &look.theme, &p.name, &p.rules), None => crate::audit::audit(ui, px, &ground) };
+    if let Some((p, pg)) = &plain { f.extend(crate::audit::eroded(ui, (px, &ground), (p, pg), look.material.name())); }
+    crate::audit::sort(&mut f);
+    f
+}
+
 /// A page with the look's material and theme replaced (for recipes, whose look comes from their state).
 struct Styled { inner: Box<dyn Driven>, material: Option<Material>, theme: Option<usize> }
 impl Driven for Styled {
@@ -224,6 +232,50 @@ impl Driven for Styled {
     fn frame_drawn(&mut self) { self.inner.frame_drawn() }
     fn command(&mut self, cmd: crate::morph::Cmd) -> Result<(), DriveError> { self.inner.command(cmd) }
     fn audit(&mut self, o: &mut Offscreen, look: &Look, px: &[u8]) -> Vec<crate::audit::Finding> { self.inner.audit(o, look, px) }
+    fn audit_under(&mut self, o: &mut Offscreen, look: &Look, px: &[u8], preset: &crate::preset::Preset) -> Vec<crate::audit::Finding> { self.inner.audit_under(o, look, px, preset) }
+}
+
+/// A page drawn in a preset (`RenderSpec::preset`): its look is the preset's over the page's own (the
+/// material and theme asked for on top), and its audit holds it to the preset's rules.
+struct Preseted { inner: Box<dyn Driven>, preset: crate::preset::Preset, material: Option<Material>, theme: Option<usize> }
+impl Driven for Preseted {
+    fn now(&self) -> f32 { self.inner.now() }
+    fn tick(&mut self, t: f32) { self.inner.tick(t) }
+    fn apply(&mut self, input: &Input) -> Result<(), DriveError> { self.inner.apply(input) }
+    fn look(&self) -> Look {
+        let mut l = self.preset.apply(&self.inner.look());
+        if let Some(m) = self.material { l.material = m; }
+        if let Some(t) = self.theme { l.theme = THEMES[t]; }
+        l
+    }
+    fn tree(&self) -> TreeNode { self.inner.tree() }
+    fn problems(&self) -> Vec<ViewProblem> { self.inner.problems() }
+    fn needs_frame(&self, t: f32) -> bool { self.inner.needs_frame(t) }
+    fn draw(&mut self, o: &mut Offscreen, look: &Look) -> Vec<u8> { self.inner.draw(o, look) }
+    fn ongoing(&self) -> bool { self.inner.ongoing() }
+    fn frame_drawn(&mut self) { self.inner.frame_drawn() }
+    fn command(&mut self, cmd: crate::morph::Cmd) -> Result<(), DriveError> { self.inner.command(cmd) }
+    fn recipe(&self) -> Option<String> { Some(self.preset.recipe()) }
+    fn audit(&mut self, o: &mut Offscreen, look: &Look, px: &[u8]) -> Vec<crate::audit::Finding> { self.inner.audit_under(o, look, px, &self.preset) }
+    fn audit_under(&mut self, o: &mut Offscreen, look: &Look, px: &[u8], preset: &crate::preset::Preset) -> Vec<crate::audit::Finding> { self.inner.audit_under(o, look, px, preset) }
+}
+/// `open` with every page drawn in `preset` (its look over the page's own, the material and theme asked
+/// for on top) and audited by its rules too (`audit::audit_under`): for `render_with`, `audit_with` and
+/// `frames`, as `render --preset` does.
+pub fn in_preset<'a>(preset: &'a crate::preset::Preset, open: Opener<'a>) -> Box<OpenFn<'a>> {
+    Box::new(move |page, faces, size, (material, theme, locale)| {
+        let inner = open(page, faces, size, (material, theme, locale))?;
+        Ok(Box::new(Preseted { inner, preset: preset.clone(), material, theme }) as Box<dyn Driven>)
+    })
+}
+/// The preset `given` names: a built-in one by its hash (`normcore`) or name, else a preset JSON file
+/// (`Preset::from_json`, its rules checked).
+pub fn preset_named(given: &str) -> Result<crate::preset::Preset, LookError> {
+    let all = crate::preset::presets();
+    if let Some(p) = all.iter().find(|p| p.hash == given || p.name.eq_ignore_ascii_case(given)) { return Ok(p.clone()); }
+    let known = || all.iter().map(|p| p.hash.clone()).collect::<Vec<_>>().join(", ");
+    let json = std::fs::read_to_string(given).map_err(|_| LookError::UnknownPreset { given: given.to_owned(), known: known() })?;
+    crate::preset::Preset::from_json(&json).map_err(|e| LookError::BadPreset { file: given.to_owned(), message: e.to_string() })
 }
 
 /// Open a recipe (`recipe-form`, or just `form`) at `w` × `h` device px and `scale`, with the material
@@ -232,7 +284,9 @@ pub fn open(page: &str, faces: Vec<crate::text::Face>, w: u32, h: u32, scale: f3
     open_in(page, faces, (w, h, scale), (material, theme, None))
 }
 /// How `render_with` opens a page: (page, faces, (w, h, scale), (material, theme, locale)).
-pub type Opener<'a> = &'a dyn Fn(&str, Vec<crate::text::Face>, (u32, u32, f32), (Option<Material>, Option<usize>, Option<crate::i18n::Locale>)) -> Result<Box<dyn Driven>, LookError>;
+pub type Opener<'a> = &'a OpenFn<'a>;
+/// What an `Opener` points at: page, faces, (width, height, scale), (material, theme, locale) to the page.
+pub type OpenFn<'a> = dyn Fn(&str, Vec<crate::text::Face>, (u32, u32, f32), (Option<Material>, Option<usize>, Option<crate::i18n::Locale>)) -> Result<Box<dyn Driven>, LookError> + 'a;
 /// `open` with the look and the language given together: (material, theme, locale). Recipes keep
 /// their own language.
 pub fn open_in(page: &str, faces: Vec<crate::text::Face>, (w, h, scale): (u32, u32, f32), (material, theme, _locale): (Option<Material>, Option<usize>, Option<crate::i18n::Locale>)) -> Result<Box<dyn Driven>, LookError> {

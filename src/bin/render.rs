@@ -2,7 +2,7 @@
 //! clock from 0, fixed seeds: the same arguments give byte-identical PNGs.
 //!
 //! ```text
-//! usage: render --page <recipe-name> [--size 1280x800] [--scale 1] [--material <id>] [--theme <id>] [--locale en|zh-Hans]
+//! usage: render --page <recipe-name> [--size 1280x800] [--scale 1] [--preset <hash|file.json>] [--material <id>] [--theme <id>] [--locale en|zh-Hans]
 //!               [--at <ms>] [--events <file.json>] [--out out.png] [--tree out.json] [--strict]
 //!        render --page <recipe-name> --frames <from>..<to> [--fps 60] --out dir/%05d.png [...]
 //! ```
@@ -17,10 +17,12 @@
 //! text; see `amenui::drive::Input`). Problems in the view (duplicate keys…) are printed; `--strict` makes
 //! them an error. `--audit` measures the frame (`amenui::audit`: text cut off, contrast, glyphs over each
 //! other, text too small, a page that never settles) and prints the findings, most serious first;
-//! with `--strict`, a P0 or P1 finding is an error too.
-use amenui::drive::{RenderSpec, audit, parse_events};
+//! with `--strict`, a P0 or P1 finding is an error too. `--preset` draws the page in a preset (a built-in
+//! one's hash, such as `normcore`, or a preset's JSON file) and holds it to the preset's rules as well
+//! (`amenui::preset::Rule`: contrast, text size, margin, measure, accent).
+use amenui::drive::{RenderSpec, parse_events};
 
-const USAGE: &str = "usage: render --page <recipe-name> [--size 1280x800] [--scale 1] [--material <id>] [--theme <id>] [--locale en|zh-Hans] [--at <ms> | --frames <from>..<to> [--fps 60]] [--events <file.json>] [--out out.png | dir/%05d.png] [--tree out.json] [--audit] [--strict]";
+const USAGE: &str = "usage: render --page <recipe-name> [--size 1280x800] [--scale 1] [--preset <hash|file.json>] [--material <id>] [--theme <id>] [--locale en|zh-Hans] [--at <ms> | --frames <from>..<to> [--fps 60]] [--events <file.json>] [--out out.png | dir/%05d.png] [--tree out.json] [--audit] [--strict]";
 
 /// `--out` with the frame's number put in for `%d` or `%0Nd`.
 fn numbered(pattern: &str, n: u32) -> Option<String> {
@@ -40,7 +42,7 @@ fn fail(msg: impl std::fmt::Display) -> ! {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut spec = RenderSpec { page: String::new(), w: 1280, h: 800, scale: 1.0, material: None, theme: None, at_ms: 1000.0, events: vec![], locale: None };
-    let (mut out, mut tree, mut strict, mut audited) = ("out.png".to_owned(), None, false, false);
+    let (mut out, mut tree, mut strict, mut audited, mut preset) = ("out.png".to_owned(), None, false, false, None::<String>);
     let (mut frames, mut fps, mut at_given) = (None, 60u32, false);
     let mut i = 0;
     while i < args.len() {
@@ -57,6 +59,7 @@ fn main() {
                 spec.h = h.parse().unwrap_or_else(|_| fail(format!("`--size {v}`: `{h}` is not a whole number of px.")));
             }
             "--scale" => spec.scale = v.parse().unwrap_or_else(|_| fail(format!("`--scale {v}`: write device px per logical px, e.g. 1 or 2."))),
+            "--preset" => preset = Some(v),
             "--material" => spec.material = Some(v),
             "--theme" => spec.theme = Some(v),
             "--locale" => spec.locale = Some(v),
@@ -79,6 +82,10 @@ fn main() {
     }
     if spec.page.is_empty() { fail(format!("`--page` is required.\n{USAGE}")); }
     let faces = amenui::text::load_bundled(concat!(env!("CARGO_MANIFEST_DIR"), "/assets")).unwrap_or_else(|e| fail(e));
+    // A preset: every page opened in it, its rules in the audit.
+    let preset = preset.map(|p| amenui::drive::preset_named(&p).unwrap_or_else(|e| fail(e)));
+    let in_preset = preset.as_ref().map(|p| amenui::drive::in_preset(p, &amenui::drive::open_in));
+    let open: amenui::drive::Opener = match &in_preset { Some(f) => &**f, None => &amenui::drive::open_in };
     if let Some(range) = frames {
         if at_given { fail("give `--at` or `--frames`, not both."); }
         if numbered(&out, 0).is_none() { fail(format!("`--out {out}`: with `--frames`, put `%05d` where the frame's number goes, e.g. `--out frames/%05d.png`.")); }
@@ -93,7 +100,6 @@ fn main() {
             fails |= amenui::audit::fails(&measured);
             if let Some(m) = measured.first() && worst.as_ref().is_none_or(|(_, w)| m.level < w.level) { worst = Some((n, m.clone())); }
         };
-        let open: amenui::drive::Opener = &amenui::drive::open_in;
         if audited { amenui::drive::audit_frames(&spec, range.clone(), fps, faces, None, open, &mut each) }
         else { amenui::drive::frames(&spec, range.clone(), fps, faces, None, open, &mut |n, r| each(n, r, &[])) }.unwrap_or_else(|e| fail(e));
         if audited {
@@ -103,7 +109,7 @@ fn main() {
         if strict && (problems || fails) { std::process::exit(1); }
         return;
     }
-    let (r, findings) = if audited { audit(&spec, faces, None) } else { amenui::drive::render(&spec, faces, None).map(|r| (r, vec![])) }.unwrap_or_else(|e| fail(e));
+    let (r, findings) = if audited { amenui::drive::audit_with(&spec, faces, None, open) } else { amenui::drive::render_with(&spec, faces, None, open).map(|r| (r, vec![])) }.unwrap_or_else(|e| fail(e));
     for p in &r.problems { eprintln!("render: problem: {p}"); }
     if audited {
         // The view's problems are in the problems above; the audit lists them too, so leave them out here.

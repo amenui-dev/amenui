@@ -26,7 +26,7 @@ pub fn view(s: &App) -> El<Msg> {
     let body = (0..30).fold(col().gap(10.0), |c, i| c.child(text(format!("Item {}", i + 1), 15.0, Paint::TEXT).key(format!("item{i}"))));
     // The page, the floating box and the sheet over one another in the same box.
     let page = col().key("page").fill_width().fill_height().pad(20.0, 20.0).child(button_as("open", "Open the sheet", Variant::Primary, Msg::Open));
-    layers([page, floating("pip", &s.pip, text("Picture in picture", 13.0, Paint::TEXT).key("pip/label"), Msg::Pip), bottom_sheet("sheet", &s.sheet, "Sheet", body, Msg::Sheet)])
+    layers([page, floating("pip", &s.pip, col().pad(10.0, 10.0).child(text("Picture in picture", 13.0, Paint::TEXT).key("pip/label")), Msg::Pip), bottom_sheet("sheet", &s.sheet, "Sheet", body, Msg::Sheet)])
         .key("screen").width(360.0).height(600.0).clip()
 }
 

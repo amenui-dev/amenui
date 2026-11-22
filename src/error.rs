@@ -48,6 +48,22 @@ pub enum LookError {
         /// The highest number.
         last: usize,
     },
+    #[error("unknown preset `{given}`: it is no preset's hash or name and no file. Write one of: {known}, or the path of a preset's JSON.")]
+    /// No built-in preset is called that, and no file is there.
+    UnknownPreset {
+        /// What was asked for.
+        given: String,
+        /// The built-in presets' hashes.
+        known: String,
+    },
+    #[error("the preset in `{file}` could not be used: {message}")]
+    /// A preset file that is not a preset, or whose rules are looser than the audit's floors.
+    BadPreset {
+        /// The file.
+        file: String,
+        /// Why.
+        message: String,
+    },
     #[error("unknown page `{given}`. Write a recipe or a component page ({recipes}) or a page the application adds, such as a site page hash.")]
     /// No recipe or application page has that name.
     UnknownPage {
@@ -316,6 +332,18 @@ pub enum PresetError {
     #[error("not a look recipe ({0}). A recipe is `look:v3:` and then base64url of a small JSON object: `base` (a preset's hash, such as \"normcore\") and `set` (paths as `numbers` names them, with their values). Copy one from the 风格 page, or from a PNG the render tool wrote (its `amenui-recipe` text chunk).")]
     /// Not a look recipe.
     Recipe(String),
+    #[error("preset \"{preset}\": {rule} {given} is {} the audit's floor ({floor}). A preset's rules can only be stricter.", if given > floor { "above" } else { "below" })]
+    /// A rule looser than the audit's own floor (`Preset::check`).
+    Looser {
+        /// The preset's name.
+        preset: String,
+        /// The rule's number, as `contrast.min`.
+        rule: &'static str,
+        /// What the preset gives it.
+        given: f32,
+        /// The audit's own floor.
+        floor: f32,
+    },
 }
 
 /// A message catalog (`assets/i18n/<tag>.txt`) could not be used.

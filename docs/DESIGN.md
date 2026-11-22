@@ -3095,6 +3095,31 @@ Everything is measured; each `fix` is one sentence to act on, naming the element
 | `Eroded` | at looseness 0, the ink pixels (differing from the ground by at least 24 and by at least half the line's contrast) inside each text-to-read ink box, against the same page drawn in `plain` | under 85 % of plain's: P1 |
 | `Restless` | after the last input, the clock run on at 60 Hz: still asking for frame after frame 2 s later with nothing visible marked `El::ongoing()` (a timed wake now and then, such as a caret's blink, is not restless) | P1 |
 
+**A preset's rules** (`Preset::rules`, `preset::Rule`). A preset can hold its pages to more than the floors above,
+and only to more: five rules, each measured on the same frame, and `audit::audit_under(ui, px, ground, theme, name,
+rules)` adds them to the audit. `render --preset <hash|file.json>` draws the page in a preset and audits it by
+its rules (`drive::in_preset` wraps an opener so, for `render_with`, `audit_with` and `frames`).
+
+| rule | what is measured | finding |
+|---|---|---|
+| `contrast { of, min }` | as `Contrast`; `of: prose` is running text (legible, no larger than the theme's body size, more than 40 characters in the element), `of: read` all text to read | `Contrast` |
+| `text_size { min }` | the drawn height of text to read, as `Small`, in logical px | `Small` |
+| `margin { min }` | the ink of text to read to each window edge, logical px; in a scroll view, the left, the right and (scrolled to the top) the top | `Margin` |
+| `measure { max }` | characters on each line of running text, wide ones (CJK, full-width) counting 2 | `Measure` |
+| `accent { max }` | the share of the frame within 24/255 of the theme's accent in every channel | `Accent` |
+
+A rule's finding is a P1. Where the floor and a rule find the same kind in the same element there is one finding,
+the rule's, at P0 when the floor found a P0. A preset read from JSON or a recipe with a contrast under 4.5 or a text
+size under 9 px is refused (`PresetError::Looser`, naming the rule); one written before rules has none. The ten
+presets: running text 7:1 and all text to read 4.5:1; text size, margin and measure 11/16/80 (Algorithmic Gaze),
+12/14/64 (Neo-Dotmatrix), 12/16/72 (Lo-Fi Print), 12/24/72 (Glitch), 12/16/68 (Metamorphosis Linocut and Bauhaus),
+11/24/80 (Tech-Manual), 12/12/80 (Normcore), 11/16/80 (Cyberminimalism), 11/16/72 (Loose Thread); an accent share
+of 2 % for Tech-Manual and Normcore and 1 % for Cyberminimalism and Loose Thread. The default looks have none.
+
+For them the recipes changed: the preset and form3d recipes' descriptions are `TEXT` (running text in `DIM` is
+5–6.4:1 in five presets), the stack recipe's formula is 12 px, and the gesture recipe's floating label is padded
+10 px (its ink was 22 px from the top).
+
 Posed text dimmed by depth on purpose is read by its nearer half; the smallest size of posed text is its 10th
 percentile among the glyphs drawn at half opacity or more. A clipped finding says which side is cut, how far
 the ink reaches past it (px) and what cuts it (the clipping element's key, or the window), and suggests
@@ -3127,7 +3152,10 @@ Acceptance: `tests/audit.rs` (five pages broken on purpose, each reporting its f
 window `Clipped` P0, grey on grey `Contrast` P0, two lines over each other `Overlap` P1, 6 px text `Small` P1, an
 element that never stops moving `Restless` P1, and not when it is marked `ongoing`; text a material wears away at
 rest `Eroded` P1; a calm page has no findings;
-the seventeen recipes in every material, dark and light, have no P0 or P1); `render --page recipe-form --audit
+the seventeen recipes in every material, dark and light, have no P0 or P1); `tests/preset_rules.rs` (each rule on a
+page broken for it reports one P1 with its measure and limit, and nothing without the rule; the floor and a rule
+on the same text report once; a looser preset is refused and an older one reads with no rules; the seventeen
+recipes in each preset have no P0 or P1, Glitch left out, see §9); `render --page recipe-form --audit
 --strict` exits 0.
 
 A component's examples are a page too: `render --page component-<name>` lays out `examples/components/<name>.rs`
@@ -4547,7 +4575,11 @@ Text on a form, the warm-up and the audit (§1.23, §1.26, §1.31):
   `Renderer::begin` makes the core pipelines at once rather than over the first steps, since plain needs them for the
   first frame. A view reads progress from the state or through `Ui::ready` (it has no runtime to ask).
 - The audit is its own entry (`drive::audit`), not a field of `RenderSpec`, so code that builds `RenderSpec` keeps
-  building. `MeshHit` lost `Eq` and `Hash` with its float fields.
+  building. A preset is given the same way: an opener wrapped by `drive::in_preset`.
+- Under the Glitch preset, labels in the form, submenu and loading recipes measure under the audit's own floors
+  (2.3–4.2:1; a P0 at 2.95:1 in the submenu): its finishing pass (chroma offset, scanlines) splits and darkens the
+  strokes the contrast measure reads. Without the finishing pass they pass. `tests/preset_rules.rs` leaves Glitch
+  out of the recipe check until that is settled. `MeshHit` lost `Eq` and `Hash` with its float fields.
 - The contrast measure is the strongest ink pixel of a line, the colour the text is drawn in; percentiles of the ink
   read antialiased edges at small sizes as low contrast.
 

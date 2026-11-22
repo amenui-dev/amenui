@@ -1433,6 +1433,13 @@ impl<S, M: Clone> Ui<S, M> {
             line: Rect::new(v[0], v[1], v[2], v[3]), ink: Rect::new(v[4], v[5], v[6], v[7]), baseline: v[8], cap_top: v[9], x_top: v[10],
         }).collect()
     }
+    /// The text of each laid-out line of text node `i` (as shown: a clamped text's own), in order.
+    pub(crate) fn line_texts(&mut self, i: usize) -> Vec<String> {
+        let Some(p) = self.nodes.get(i).and_then(|n| n.para()) else { return vec![] };
+        let s = p.s.to_owned();
+        let mut at = 0;
+        self.text.line_ends(p).into_iter().map(|e| { let e = e.min(s.len()); let l = s.get(at..e).unwrap_or_default().to_owned(); at = e; l }).collect()
+    }
     /// How many lines of text element `key` end in a hyphenated break (`Around::hyphenate`).
     pub fn hyphenated_lines(&mut self, key: &str) -> usize {
         let Some(n) = self.nodes.iter().find(|n| n.key == key) else { return 0 };

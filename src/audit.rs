@@ -42,11 +42,17 @@ pub enum Kind {
     Eroded,
     /// A problem in the view's structure (`Ui::problems`).
     Structure,
+    /// Text to read nearer a window edge than its preset's rule allows (`preset::Rule::Margin`).
+    Margin,
+    /// A line of running text longer than its preset's rule allows (`preset::Rule::Measure`).
+    Measure,
+    /// More of the frame at rest in the accent than its preset's rule allows (`preset::Rule::Accent`).
+    Accent,
 }
 impl Kind {
     /// Its name in the audit's output.
     pub fn name(self) -> &'static str {
-        match self { Kind::Clipped => "clipped", Kind::Contrast => "contrast", Kind::Overlap => "overlap", Kind::Small => "small", Kind::Restless => "restless", Kind::Eroded => "eroded", Kind::Structure => "structure" }
+        match self { Kind::Clipped => "clipped", Kind::Contrast => "contrast", Kind::Overlap => "overlap", Kind::Small => "small", Kind::Restless => "restless", Kind::Eroded => "eroded", Kind::Structure => "structure", Kind::Margin => "margin", Kind::Measure => "measure", Kind::Accent => "accent" }
     }
 }
 
@@ -75,6 +81,8 @@ impl std::fmt::Display for Finding {
 
 /// The smallest text to read, device px.
 pub const MIN_TEXT_PX: f32 = 9.0;
+/// The least contrast of text to read (WCAG 2 AA): under it is a P1, under 3 a P0.
+pub const MIN_CONTRAST: f32 = 4.5;
 /// The most of one glyph's ink another may cover in text to read.
 pub const MAX_OVERLAP: f32 = 0.10;
 /// How long a page may go on asking for frames after the last input (s).
@@ -236,16 +244,18 @@ pub fn ratio(a: [u8; 3], b: [u8; 3]) -> f32 {
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
-fn contrast<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], out: &mut Vec<Finding>) {
+/// Each text's weakest line: its node, the line (from 0) and the ratio of that line's strongest ink
+/// against what is drawn under it (pixels that differ from the ground by 24 or more over the three
+/// channels; the strongest of them is the colour the text is drawn in, where a stem covers a whole pixel).
+fn line_contrast<S, M: Clone>(ui: &Ui<S, M>, px: &[u8], ground: &[u8]) -> Vec<(usize, usize, f32)> {
     let (dw, dh) = ui.device_size();
-    if px.len() < (dw * dh * 4) as usize || ground.len() < px.len() { return; }
+    if px.len() < (dw * dh * 4) as usize || ground.len() < px.len() { return vec![]; }
     let at = |buf: &[u8], x: u32, y: u32| { let o = ((y * dw + x) * 4) as usize; [buf[o], buf[o + 1], buf[o + 2]] };
     let under = ui.modal_at();
     let texts: Vec<usize> = ui.nodes().iter().enumerate().filter(|(i, n)| n.text().is_some_and(|t| !t.trim().is_empty()) && !n.hidden && !n.disabled && !n.skeleton && under.is_none_or(|m| *i >= m)).map(|(i, _)| i).collect();
-    let glyphs = ui.glyphs().clone();
+    let glyphs = ui.glyphs();
+    let mut out = vec![];
     for i in texts {
-        let legible = ui.nodes()[i].legible;
-        let key = ui.nodes()[i].key.clone();
         // Posed text dimmed by depth on purpose (`FormFx::fog`): read the nearer half of it.
         let mut zs: Vec<f32> = glyphs.log.iter().filter(|g| g.node == i).map(|g| g.z).collect();
         zs.sort_by(f32::total_cmp);
@@ -265,8 +275,6 @@ fn contrast<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], out: &mut 
         }
         let mut worst: Option<(f32, usize)> = None;
         for (k, (_, boxes)) in lines.iter().enumerate() {
-            // The ink: pixels that differ from the ground under them; the measure is the strongest of them
-            // (the colour the text is drawn in, where a stem covers a whole pixel, not its antialiased edges).
             let mut rs: Vec<f32> = vec![];
             for b in boxes {
                 for y in b[1] as u32..(b[3] as u32).min(dh) {
@@ -281,14 +289,21 @@ fn contrast<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], out: &mut 
             let r = rs.iter().copied().fold(0.0, f32::max);
             if worst.is_none_or(|(w, _)| r < w) { worst = Some((r, k)); }
         }
-        let Some((r, line)) = worst else { continue };
-        // A lone mark (›, −, ×: no letter or digit in it) is a symbol, not text to read: it needs the 3:1
-        // of a graphic (WCAG 1.4.11).
-        let mark = !ui.nodes()[i].text().unwrap_or_default().chars().any(char::is_alphanumeric);
-        let (level, limit) = if legible && mark { if r < 3.0 { (Level::P1, 3.0) } else { continue } }
-            else if legible { if r < 3.0 { (Level::P0, 3.0) } else if r < 4.5 { (Level::P1, 4.5) } else { continue } }
+        if let Some((r, line)) = worst { out.push((i, line, r)); }
+    }
+    out
+}
+/// A lone mark (›, −, ×: no letter or digit in it) is a symbol, not text to read: it needs the 3:1 of a
+/// graphic (WCAG 1.4.11), and a preset's rules are not about it.
+fn is_mark<S, M: Clone>(ui: &Ui<S, M>, i: usize) -> bool { !ui.nodes()[i].text().unwrap_or_default().chars().any(char::is_alphanumeric) }
+
+fn contrast<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], out: &mut Vec<Finding>) {
+    for (i, line, r) in line_contrast(ui, px, ground) {
+        let legible = ui.nodes()[i].legible;
+        let (level, limit) = if legible && is_mark(ui, i) { if r < 3.0 { (Level::P1, 3.0) } else { continue } }
+            else if legible { if r < 3.0 { (Level::P0, 3.0) } else if r < MIN_CONTRAST { (Level::P1, MIN_CONTRAST) } else { continue } }
             else if r < 3.0 { (Level::P3, 3.0) } else { continue };
-        out.push(Finding { level, key, kind: Kind::Contrast, measured: r, limit,
+        out.push(Finding { level, key: ui.nodes()[i].key.clone(), kind: Kind::Contrast, measured: r, limit,
             fix: format!("line {} reads {r:.2}:1 against what is drawn under it (needs {limit}:1): use a stronger paint (`Paint::TEXT` or `Paint::INK`), or a calmer ground under it", line + 1) });
     }
 }
@@ -432,22 +447,160 @@ pub fn eroded<S, M: Clone>(ui: &Ui<S, M>, (px, ground): (&[u8], &[u8]), (plain, 
     out
 }
 
-fn small<S, M: Clone>(ui: &mut Ui<S, M>, out: &mut Vec<Finding>) {
+/// Each text to read: its node, its size (logical px) and the height its clearly drawn glyphs have (device
+/// px): its size as scaled by their poses. Flat text by its smallest glyph; posed text (on a path, on a
+/// form, foreshortened at the rim on purpose) by the smallest tenth.
+fn heights<S, M: Clone>(ui: &Ui<S, M>) -> Vec<(usize, f32, f32)> {
     let s = ui.scale();
-    let glyphs = ui.glyphs().clone();
-    for i in reading(ui) {
-        let Some(size) = ui.nodes()[i].para().map(|p| p.size) else { continue };
-        // The height its clearly drawn glyphs have: its size, as scaled by their poses. Flat text by its
-        // smallest glyph; posed text (on a path, on a form, foreshortened at the rim on purpose) by
-        // the smallest tenth.
+    let glyphs = ui.glyphs();
+    reading(ui).into_iter().filter_map(|i| {
+        let size = ui.nodes()[i].para().map(|p| p.size)?;
         let mut hs: Vec<f32> = glyphs.log.iter().filter(|g| g.node == i).filter_map(|g| ui.scene().instances.get(g.inst)).filter(|inst| inst.paint[2] >= 0.5)
             .map(|inst| { let x = inst.xf; size * s * (x[1] * x[1] + (1.0 + x[3]) * (1.0 + x[3])).sqrt() }).collect();
         hs.sort_by(f32::total_cmp);
         let posed = matches!(&ui.nodes()[i].content, crate::el::Content::Text { pose: Some(_), .. });
-        let least = if posed { hs.get(hs.len() / 10).copied().unwrap_or(f32::INFINITY) } else { hs.first().copied().unwrap_or(f32::INFINITY) };
-        if least.is_finite() && least < MIN_TEXT_PX {
+        let least = if posed { hs.get(hs.len() / 10).copied() } else { hs.first().copied() }?;
+        Some((i, size, least))
+    }).collect()
+}
+
+fn small<S, M: Clone>(ui: &mut Ui<S, M>, out: &mut Vec<Finding>) {
+    for (i, size, least) in heights(ui) {
+        if least < MIN_TEXT_PX {
             out.push(Finding { level: Level::P1, key: ui.nodes()[i].key.clone(), kind: Kind::Small, measured: least, limit: MIN_TEXT_PX,
                 fix: format!("drawn {least:.1} device px tall (needs {MIN_TEXT_PX}): set it at {:.0} px or more, or let it be decoration (`.legible(false)`)", (size * MIN_TEXT_PX / least).ceil().max(size + 1.0)) });
+        }
+    }
+}
+
+/// Running text (`preset::Of::Prose`): text to read no larger than the theme's body size, with more
+/// than 40 characters in the element.
+fn is_prose<S, M: Clone>(ui: &Ui<S, M>, i: usize, theme: &crate::style::Theme) -> bool {
+    let n = &ui.nodes()[i];
+    n.para().is_some_and(|p| p.size <= theme.sizes.body + 1e-3) && n.text().is_some_and(|t| t.chars().filter(|c| !c.is_whitespace()).count() > 40)
+}
+/// How many columns a character takes in a measure: 2 for wide ones (CJK, Hangul, full-width forms).
+fn columns(c: char) -> usize {
+    let u = c as u32;
+    let wide = matches!(u, 0x1100..=0x115F | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xA000..=0xA4CF
+        | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFD);
+    if wide { 2 } else { 1 }
+}
+
+/// The audit (`audit`) of a page drawn in a preset: `by` its name, `rules` its rules, `theme` the theme it
+/// was drawn in. Each rule is measured on the same frame; where a rule and the audit's own floor find the
+/// same thing in the same element, one finding is kept: the rule's, a P1 (a P0 where the floor found a P0).
+pub fn audit_under<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: &crate::style::Theme, by: &str, rules: &[crate::preset::Rule]) -> Vec<Finding> {
+    let mut out = audit(ui, px, ground);
+    let found = rules_found(ui, px, ground, theme, by, rules);
+    for f in found {
+        let level = match out.iter().position(|d| d.key == f.key && d.kind == f.kind) {
+            Some(k) => { let l = out.remove(k).level; if l == Level::P0 { Level::P0 } else { Level::P1 } }
+            None => Level::P1,
+        };
+        out.push(Finding { level, ..f });
+    }
+    sort(&mut out);
+    out
+}
+
+fn rules_found<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: &crate::style::Theme, by: &str, rules: &[crate::preset::Rule]) -> Vec<Finding> {
+    use crate::preset::{Of, Rule};
+    let mut out = vec![];
+    let s = ui.scale();
+    let (prose_min, read_min) = rules.iter().fold((None::<f32>, None::<f32>), |(p, r), rule| match *rule {
+        Rule::Contrast { of: Of::Prose, min } => (Some(p.map_or(min, |p: f32| p.max(min))), r),
+        Rule::Contrast { of: Of::Read, min } => (p, Some(r.map_or(min, |r: f32| r.max(min)))),
+        _ => (p, r),
+    });
+    if prose_min.is_some() || read_min.is_some() {
+        for (i, line, r) in line_contrast(ui, px, ground) {
+            if !ui.nodes()[i].legible || is_mark(ui, i) { continue; }
+            let prose = prose_min.filter(|_| is_prose(ui, i, theme));
+            let (limit, what) = match (prose, read_min) {
+                (Some(p), Some(q)) if p >= q => (p, " for prose"),
+                (Some(p), None) => (p, " for prose"),
+                (_, Some(q)) => (q, ""),
+                (None, None) => continue,
+            };
+            if r < limit {
+                out.push(Finding { level: Level::P1, key: ui.nodes()[i].key.clone(), kind: Kind::Contrast, measured: r, limit,
+                    fix: format!("line {} reads {r:.2}:1 against what is drawn under it ({by} needs {limit}:1{what}): use a stronger paint (`Paint::TEXT` or `Paint::INK`), or a calmer ground under it", line + 1) });
+            }
+        }
+    }
+    for rule in rules {
+        match *rule {
+            Rule::Contrast { .. } => {}
+            Rule::TextSize { min } => for (i, size, least) in heights(ui) {
+                let drawn = least / s;
+                if drawn < min - 1e-3 {
+                    out.push(Finding { level: Level::P1, key: ui.nodes()[i].key.clone(), kind: Kind::Small, measured: drawn, limit: min,
+                        fix: format!("drawn {drawn:.1} px tall ({by} needs {min}): set it at {:.0} px or more, or let it be decoration (`.legible(false)`)", (size * min / drawn).ceil()) });
+                }
+            },
+            Rule::Margin { min } => margin(ui, by, min, &mut out),
+            Rule::Measure { max } => measure(ui, theme, by, max, &mut out),
+            Rule::Accent { max } => {
+                let n = px.len() / 4;
+                if n == 0 { continue; }
+                let a = theme.accent.map(|v| (v * 255.0).round() as i32);
+                let hit = px.chunks_exact(4).filter(|q| (0..3).all(|k| (q[k] as i32 - a[k]).abs() <= 24)).count();
+                let share = hit as f32 / n as f32;
+                if share > max {
+                    out.push(Finding { level: Level::P1, key: String::new(), kind: Kind::Accent, measured: share, limit: max,
+                        fix: format!("the accent covers {:.1}% of the frame at rest ({by} allows {}%): keep the accent for what is held or dragged, and draw the rest in ink", share * 100.0, max * 100.0) });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `Rule::Margin`: each text to read whose ink comes nearer than `min` logical px to an edge of the
+/// window. Text in a scroll view is measured from the left and the right, and from the top while its
+/// scroll view is at the top; never from the bottom.
+fn margin<S, M: Clone>(ui: &Ui<S, M>, by: &str, min: f32, out: &mut Vec<Finding>) {
+    const SIDES: [(&str, &str, &str); 4] = [("left", "right", "left"), ("top", "down", "top"), ("right", "left", "right"), ("bottom", "up", "bottom")];
+    let s = ui.scale();
+    let (w, h) = ui.logical_size();
+    let glyphs = ui.glyphs();
+    for i in reading(ui) {
+        let mut b = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+        for g in glyphs.log.iter().filter(|g| g.node == i) {
+            let Some(inst) = ui.scene().instances.get(g.inst) else { continue };
+            if inst.paint[2] < 0.3 { continue; }
+            let k = ink_box(inst);
+            if k[2] <= k[0] || k[3] <= k[1] { continue; }
+            b = [b[0].min(k[0]), b[1].min(k[1]), b[2].max(k[2]), b[3].max(k[3])];
+        }
+        if b[2] <= b[0] { continue; }
+        let b = b.map(|v| v / s);
+        // The nearest scroll view it is in, and whether that is scrolled away from its top.
+        let mut a = ui.nodes()[i].parent;
+        let mut scroll: Option<bool> = None;
+        while let Some(p) = a { let n = &ui.nodes()[p]; if n.scroll { scroll = Some(ui.scroll_offset(&n.key) > 0.5); break; } a = n.parent; }
+        let gaps = [b[0], b[1], w - b[2], h - b[3]];
+        let measured = |k: usize| match (k, scroll) { (3, Some(_)) => false, (1, Some(away)) => !away, _ => true };
+        let Some((k, gap)) = gaps.iter().copied().enumerate().filter(|(k, _)| measured(*k)).min_by(|x, y| x.1.total_cmp(&y.1)) else { continue };
+        if gap < min - 0.5 {
+            let more = (min - gap).ceil();
+            let (side, way, pad) = SIDES[k];
+            out.push(Finding { level: Level::P1, key: ui.nodes()[i].key.clone(), kind: Kind::Margin, measured: gap.max(0.0), limit: min,
+                fix: format!("its ink ends {:.0} px from the window's {side} edge ({by} needs {min}): move it {way} {more:.0} px, or give the page {more:.0} px more padding at the {pad}", gap.max(0.0)) });
+        }
+    }
+}
+
+/// `Rule::Measure`: the longest line of each running text (`is_prose`), in characters (wide ones count 2).
+fn measure<S, M: Clone>(ui: &mut Ui<S, M>, theme: &crate::style::Theme, by: &str, max: f32, out: &mut Vec<Finding>) {
+    for i in reading(ui) {
+        if !is_prose(ui, i, theme) { continue; }
+        let lines = ui.line_texts(i);
+        let Some((k, n)) = lines.iter().map(|l| l.trim_end().chars().map(columns).sum::<usize>()).enumerate().max_by_key(|x| x.1) else { continue };
+        if n as f32 > max + 1e-3 {
+            out.push(Finding { level: Level::P1, key: ui.nodes()[i].key.clone(), kind: Kind::Measure, measured: n as f32, limit: max,
+                fix: format!("line {} runs {n} characters ({by} allows {max}): make the column about {:.0}% narrower, or set the text larger", k + 1, (1.0 - max / n as f32) * 100.0) });
         }
     }
 }

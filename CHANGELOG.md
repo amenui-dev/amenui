@@ -10,6 +10,13 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Marks only while the cards move
 
+- A preset carries rules (`Preset::rules`, `preset::Rule`: contrast for running text or all text to read, text size,
+  margin, measure, accent share) that the audit holds its pages to as well (`audit::audit_under`, `render --preset`,
+  `drive::in_preset`); the ten presets each have theirs. A rule can only tighten: a preset with a contrast under 4.5
+  or a text size under 9 px is refused when read (`PresetError::Looser`). Breaking: `audit::Kind` has `Margin`,
+  `Measure` and `Accent`; `LookError` has `UnknownPreset` and `BadPreset`, `PresetError` has `Looser`; `Preset` has `rules` (older JSON reads with
+  none).
+
 - The pointer leaving an element whose messages are its own (`El::local_messages`) restages it as a move over it does;
   the leave had viewed and laid out the whole page. On the Lab's loupe this takes a 10 ms frame each time the pointer
   leaves the glass down to an ordinary one.

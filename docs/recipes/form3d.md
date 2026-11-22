@@ -76,7 +76,7 @@ pub fn view(s: &Form3d) -> El<Msg> {
     };
     col().key("page").pad(32.0, 28.0).gap(10.0)
         .child(text("text on a form", 26.0, Paint::INK).key("title"))
-        .child(text("Move over the sphere to find a place on it; drag to turn it.", 14.0, Paint::DIM).key("hint"))
+        .child(text("Move over the sphere to find a place on it; drag to turn it.", 14.0, Paint::TEXT).key("hint"))
         .child(text(PASSAGE, 19.0, Paint::TEXT).key("passage").nowrap().width(SIZE).height(SIZE)
             .pose(pose).form(FormFx::default()).reveal_by(Reveal::Word).on_point(|p| Some(Msg::Point(p))))
 }

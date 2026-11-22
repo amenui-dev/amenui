@@ -146,8 +146,67 @@ pub struct Preset {
     /// Marks on 3D elements by depth.
     #[serde(default)]
     pub marks: crate::style::Marks,
+    /// What the audit holds pages in this preset to, beyond its own floors (`audit::audit_under`). Rules
+    /// only tighten: a looser one is refused when the preset is read (`Preset::check`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<Rule>,
 }
+
+/// Which text a contrast rule is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Of {
+    /// Running text: legible text no larger than the theme's body size with more than 40 characters in
+    /// the element (paragraphs, list items, code).
+    Prose,
+    /// All text to read.
+    Read,
+}
+
+/// One rule a preset holds its pages to (DESIGN.md §7.2). Each is measured on the frame as drawn and only
+/// tightens the audit's own floors.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rule {
+    /// Each line's strongest ink against what is drawn under it, as `Kind::Contrast` measures: at least
+    /// `min`:1.
+    Contrast { of: Of, min: f32 },
+    /// Text to read drawn at least `min` logical px tall (size × scale × its pose's vertical scale, over
+    /// the scale).
+    TextSize { min: f32 },
+    /// The ink of text to read at least `min` logical px from each edge of the window (text in a scroll
+    /// view: from the left, the right, and the top while it is scrolled to the top).
+    Margin { min: f32 },
+    /// At most `max` characters on a line of running text (wide characters, CJK and full-width, count 2).
+    Measure { max: f32 },
+    /// At most `max` (0–1) of the frame at rest in the theme's accent (within 24/255 in every channel).
+    Accent { max: f32 },
+}
+impl Rule {
+    /// Its name, as the audit's findings and the JSON call it.
+    pub fn name(&self) -> &'static str {
+        match self { Rule::Contrast { .. } => "contrast", Rule::TextSize { .. } => "text_size", Rule::Margin { .. } => "margin", Rule::Measure { .. } => "measure", Rule::Accent { .. } => "accent" }
+    }
+}
+
 impl Preset {
+    /// Whether every rule only tightens the audit's floors: a contrast under `audit::MIN_CONTRAST` or a
+    /// text size under `audit::MIN_TEXT_PX` (at scale 1) is refused, by name; so is a margin, measure
+    /// or accent share that is not a number of its unit (negative, or an accent share over 1).
+    pub fn check(&self) -> Result<(), crate::error::PresetError> {
+        let looser = |rule: &'static str, given: f32, floor: f32| crate::error::PresetError::Looser { preset: self.name.clone(), rule, given, floor };
+        for r in &self.rules {
+            match *r {
+                Rule::Contrast { min, .. } if min.is_nan() || min < crate::audit::MIN_CONTRAST => return Err(looser("contrast.min", min, crate::audit::MIN_CONTRAST)),
+                Rule::TextSize { min } if min.is_nan() || min < crate::audit::MIN_TEXT_PX => return Err(looser("text_size.min", min, crate::audit::MIN_TEXT_PX)),
+                Rule::Margin { min } if min.is_nan() || min < 0.0 => return Err(looser("margin.min", min, 0.0)),
+                Rule::Measure { max } if max.is_nan() || max <= 0.0 => return Err(looser("measure.max", max, 1.0)),
+                Rule::Accent { max } if !(0.0..=1.0).contains(&max) => return Err(looser("accent.max", max, if max > 1.0 { 1.0 } else { 0.0 })),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
     pub fn theme(&self) -> Theme {
         let t = THEMES[theme_index(&self.theme)];
         Theme { display: self.faces[0], body: self.faces[1], mono: self.faces[2], ..t }
@@ -223,9 +282,15 @@ impl Preset {
             }
         }
         // Read back as text: one way of reading a preset (`from_json`'s) is built, not a second from a value.
-        serde_json::from_str(&v.to_string()).map_err(|e| bad(&e.to_string()))
+        let p: Self = serde_json::from_str(&v.to_string()).map_err(|e| bad(&e.to_string()))?;
+        p.check()?;
+        Ok(p)
     }
-    pub fn from_json(s: &str) -> Result<Self, crate::error::PresetError> { serde_json::from_str(s).map_err(|e| crate::error::PresetError::Json(e.to_string())) }
+    pub fn from_json(s: &str) -> Result<Self, crate::error::PresetError> {
+        let p: Self = serde_json::from_str(s).map_err(|e| crate::error::PresetError::Json(e.to_string()))?;
+        p.check()?;
+        Ok(p)
+    }
     /// Every number in the preset, by its path in the JSON (`transition.steps.0.a`), for number controls
     /// made from the data itself.
     pub fn numbers(&self) -> Vec<(String, f32)> {
@@ -357,8 +422,32 @@ pub fn presets() -> Vec<Preset> {
         Preset {
             name: st.name.into(), hash: st.hash.into(), theme: th.name.into(), faces: th.roles(), material: st.material, params: st.params.0, gaze: st.gaze,
             loose_scale: st.loose_scale, pitch: st.pitch, pic: st.pic, interaction, transition, post: post_of(st.hash), marks: crate::style::Marks::default(),
+            rules: rules_of(st.hash),
         }
     }).collect()
+}
+
+/// Each preset's rules (DESIGN.md §7.2): running text at 7:1 and all text to read at 4.5:1 everywhere;
+/// the text size each theme's `small` is (Neo-Dotmatrix's pixel face at its native 12); the margin
+/// and measure its layout keeps; an accent share only in the styles with one signal colour.
+fn rules_of(hash: &str) -> Vec<Rule> {
+    // (text size, margin, measure, accent share or none)
+    let (size, margin, measure, accent) = match hash {
+        "gaze" => (11.0, 16.0, 80.0, None),
+        "dotmatrix" => (12.0, 14.0, 64.0, None),
+        "lofi-print" => (12.0, 16.0, 72.0, None),
+        "glitch" => (12.0, 24.0, 72.0, None),
+        "linocut" => (12.0, 16.0, 68.0, None),
+        "tech-manual" => (11.0, 24.0, 80.0, Some(0.02)),
+        "normcore" => (12.0, 12.0, 80.0, Some(0.02)),
+        "cyberminimal" => (11.0, 16.0, 80.0, Some(0.01)),
+        "bauhaus" => (12.0, 16.0, 68.0, None),
+        "loose-thread" => (11.0, 16.0, 72.0, Some(0.01)),
+        _ => return vec![],
+    };
+    let mut r = vec![Rule::Contrast { of: Of::Prose, min: 7.0 }, Rule::Contrast { of: Of::Read, min: 4.5 }, Rule::TextSize { min: size }, Rule::Margin { min: margin }, Rule::Measure { max: measure }];
+    r.extend(accent.map(|max| Rule::Accent { max }));
+    r
 }
 
 /// Each preset's finishing pass: Neo-Dotmatrix is quantised to an amber palette through a 4×4
