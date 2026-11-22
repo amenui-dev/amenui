@@ -115,7 +115,8 @@ fn off_a_picture_a_ramp_across_hues_keeps_its_first_hue_and_is_reported() {
     assert!(u.problems().iter().any(|p| matches!(p, amenui::error::ViewProblem::RampHue { key } if key == "rays")), "reported: {:?}", u.problems());
     // Drawn in the root's hue all the way: no seam where a stop changes hue, only the opacity ramps.
     let f = render(&mut o, &mut u);
-    let audit = amenui::audit::audit(&mut u, &f, &f);
+    let th = u.look().theme;
+    let audit = amenui::audit::audit(&mut u, &f, &f, &th);
     assert!(audit.iter().any(|a| a.level == amenui::audit::Level::P1 && a.kind == amenui::audit::Kind::Structure && a.fix.contains("rays")), "the audit: {audit:?}");
     let g = theme().ground.map(|v| v * 255.0);
     for x in (41..399).step_by(6) {

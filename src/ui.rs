@@ -186,6 +186,8 @@ pub struct Node<M> {
     pub reveal_by: crate::el::Reveal,
     /// It moves on purpose (`El::ongoing`, inherited).
     pub ongoing: bool,
+    /// The preset it is audited under (`El::audit_under`, inherited).
+    pub audit_under: Option<Rc<crate::preset::Preset>>,
     /// The pointer passes through it (`El::pass`).
     pub pass: bool,
     /// Its own opacity (`El::opacity`).
@@ -7796,7 +7798,7 @@ fn measure_key(c: &Content) -> u64 {
 #[allow(clippy::too_many_arguments)]
 fn flatten<M>(el: El<M>, parent: Option<usize>, path: String, roles: [u8; 3], off: (bool, bool), flow: Option<(Rc<str>, usize)>, inh: Inherit, vx: &mut VirtCtx, built: &mut Built, nodes: &mut Vec<Node<M>>) -> usize {
     let stage_at = (el.props.stage || el.props.steps || el.props.local_messages).then(|| Box::new(StageCtx { parent, path: path.clone(), roles, off, flow: flow.clone(), inh: inh.clone(), held: el.props.stage, local: el.props.local_messages, part: el.props.steps }));
-    let El { props: crate::el::Props { key, mut style, mut content, fill, fill_on, border, radius, mut focusable, tab_order, skip_to, focus_shown, scroll, horizontal, bar, reveal, disabled, mut commit, fonts, loose, wipe, flow: own_flow, hidden, shift, shed, flow_field, stirr, trace, annotate, gaze_scope, material, loosen, anchor, clips, calm, map_life, multiline, selectable, cursor, ripple, guide, skeleton, rtl, decode, form, turn, reveal_by, ongoing, pass, opacity, commit_scope, preview, fit, clamp, plate, cached, clip_radius, own_size, grain, bloom, show_clear, pen, view_scale, stage: _, stack, steps: _, local_messages: _ }, mut on_press, mut on_key, mut on_drag, mut on_blur, modal, mut on_text, virt, access, mut on_pick, mut on_wheel, mut on_move, on_visible, on_outline, on_pens, mut children } = el;
+    let El { props: crate::el::Props { key, mut style, mut content, fill, fill_on, border, radius, mut focusable, tab_order, skip_to, focus_shown, scroll, horizontal, bar, reveal, disabled, mut commit, fonts, loose, wipe, flow: own_flow, hidden, shift, shed, flow_field, stirr, trace, annotate, gaze_scope, material, loosen, anchor, clips, calm, map_life, multiline, selectable, cursor, ripple, guide, skeleton, rtl, decode, form, turn, reveal_by, ongoing, pass, opacity, commit_scope, preview, fit, clamp, plate, cached, clip_radius, own_size, grain, bloom, show_clear, pen, view_scale, stage: _, stack, steps: _, local_messages: _, audit_under }, mut on_press, mut on_key, mut on_drag, mut on_blur, modal, mut on_text, virt, access, mut on_pick, mut on_wheel, mut on_move, on_visible, on_outline, on_pens, mut children } = el;
     // A view scale scales what it holds, not its pen (`El::view_scale`).
     if let Some(s) = view_scale { children = children.into_iter().map(|c| c.zoom_by(s, true)).collect(); }
     let mut inh = inh;
@@ -7872,7 +7874,7 @@ fn flatten<M>(el: El<M>, parent: Option<usize>, path: String, roles: [u8; 3], of
         content, fill, fill_on, border, radius, on_press, on_key, on_drag, on_blur, loose, wipe, bar, reveal, commit, modal, hidden, shift, shed, flow_field, stirr, trace, flow: flow.clone(),
         mat: inh.code(), loosen: inh.loosen, annotate, scope: gaze_scope, anchor, clips, calm, map_life, on_text, multiline, selectable: inh.select, cursor,
         virt: virt_info, access, respond, legible, ripple: inh.scope.clone(), ripple_scope: ripple.container || commit_scope, recompose, recompose_always: is_text && ripple.recompose == Some(true), unframed: ripple.unframed, keyed,
-        on_pick, on_wheel, on_move, guide, on_visible, on_outline, on_pens, decode, skeleton: inh.skeleton, form, turn, xf: None, reveal_by, ongoing: ongoing || parent.is_some_and(|p| nodes[p].ongoing), pass, opacity, opacity_all: opacity * parent.map_or(1.0, |p| nodes[p].opacity_all), commit_scope, fit, clamp, shown: None, plate, cached, clip_radius, clip_r: 0.0, own_size, grain, bloom, show_clear, view_scale, stage: stage_at, op0: (0.0, 0.0), pen, own_in_flow: own_size.is_some() && style.position != taffy::Position::Absolute, local: taffy::Layout::new(), exact: (0.0, 0.0), tid: placeholder,
+        on_pick, on_wheel, on_move, guide, on_visible, on_outline, on_pens, decode, skeleton: inh.skeleton, form, turn, xf: None, reveal_by, ongoing: ongoing || parent.is_some_and(|p| nodes[p].ongoing), audit_under: audit_under.or_else(|| parent.and_then(|p| nodes[p].audit_under.clone())), pass, opacity, opacity_all: opacity * parent.map_or(1.0, |p| nodes[p].opacity_all), commit_scope, fit, clamp, shown: None, plate, cached, clip_radius, clip_r: 0.0, own_size, grain, bloom, show_clear, view_scale, stage: stage_at, op0: (0.0, 0.0), pen, own_in_flow: own_size.is_some() && style.position != taffy::Position::Absolute, local: taffy::Layout::new(), exact: (0.0, 0.0), tid: placeholder,
     });
     { let n = nodes.last_mut().expect("pushed"); n.op0 = (n.opacity, n.opacity_all); }
     crate::el::snap_style(&mut style);

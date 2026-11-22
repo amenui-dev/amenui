@@ -120,3 +120,30 @@ fn every_recipe_in_each_preset_has_no_p0_or_p1() {
     }
     assert!(bad.is_empty(), "{} findings:\n{}", bad.len(), bad.join("\n"));
 }
+
+/// A subtree marked `El::audit_under` is held to that preset's rules and the rest of the page is not; the
+/// accent's share is of the subtree's box. Audited under a preset of its own, the rest of the page is held
+/// to that one, and the subtree to its own still.
+#[test]
+fn a_subtree_audited_under_a_preset_is_held_to_its_rules_and_the_rest_is_not() {
+    let Ok(mut o) = Offscreen::try_new(W, H) else { eprintln!("no GPU adapter here: skipped"); return };
+    fn page(p: &Preset) -> El<()> {
+        col().pad(40.0, 40.0).gap(12.0)
+            .child(col().key("specimen").audit_under(p).child(text("a caption drawn ten px tall", 10.0, Paint::TEXT).key("inside")))
+            .child(text("the same caption outside it", 10.0, Paint::TEXT).key("outside"))
+            .child(space(200.0, 60.0).fill(Paint::ACCENT).key("block"))
+    }
+    let held = with(vec![Rule::TextSize { min: 12.0 }, Rule::Accent { max: 0.01 }]);
+    let mut ui = Ui::new(held, page, |_, _| {}, fonts(), W, H, 1.0);
+    for k in 0..=60 { ui.tick(k as f32 / 60.0); }
+    ui.settle();
+    let look = Driven::look(&ui);
+    let px = o.render(&mut ui, &look);
+    let f = Driven::audit(&mut ui, &mut o, &look, &px);
+    assert!(of(&f, Kind::Small, "inside").iter().any(|f| f.level == Level::P1 && f.limit == 12.0), "held to its preset: {f:#?}");
+    assert!(of(&f, Kind::Small, "outside").iter().all(|f| f.level > Level::P1), "the rest is not: {f:#?}");
+    assert!(of(&f, Kind::Accent, "").is_empty(), "the accent outside the subtree is not its share: {f:#?}");
+    let f = Driven::audit_under(&mut ui, &mut o, &look, &px, &with(vec![Rule::TextSize { min: 14.0 }]));
+    assert!(of(&f, Kind::Small, "outside").iter().any(|f| f.level == Level::P1 && f.limit == 14.0), "the rest under the page's preset: {f:#?}");
+    assert!(of(&f, Kind::Small, "inside").iter().all(|f| f.limit == 12.0), "the subtree under its own: {f:#?}");
+}

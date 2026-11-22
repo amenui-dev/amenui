@@ -130,12 +130,12 @@ pub trait Driven {
     /// A frame was drawn (or counts as drawn): what was asked for is done.
     fn frame_drawn(&mut self) {}
     /// The audit of the frame just drawn (`audit::audit`): draws it again with the glyphs hidden for
-    /// the ground under the text. `px` is the frame as drawn. A page wrapping a `Ui` forwards to it;
-    /// the default finds nothing.
-    fn audit(&mut self, _o: &mut Offscreen, _look: &Look, _px: &[u8]) -> Vec<crate::audit::Finding> { vec![] }
-    /// `audit` of a page drawn in `preset`: its rules measured on the same frame too
-    /// (`audit::audit_under`). The default leaves the rules out.
-    fn audit_under(&mut self, o: &mut Offscreen, look: &Look, px: &[u8], _preset: &crate::preset::Preset) -> Vec<crate::audit::Finding> { self.audit(o, look, px) }
+    /// the ground under the text. `px` is the frame as drawn. A page wrapping a `Ui` forwards to it
+    /// (there is no default, so a wrapper cannot leave it out by mistake).
+    fn audit(&mut self, o: &mut Offscreen, look: &Look, px: &[u8]) -> Vec<crate::audit::Finding>;
+    /// `audit` of a page drawn in `preset` (`render --preset`): its rules measured on the same frame too
+    /// (`audit::audit_under`). A page wrapping a `Ui` forwards to it; there is no default, as for `audit`.
+    fn audit_under(&mut self, o: &mut Offscreen, look: &Look, px: &[u8], preset: &crate::preset::Preset) -> Vec<crate::audit::Finding>;
 }
 impl<S, M: Clone> Driven for Ui<S, M> {
     fn now(&self) -> f32 { Ui::now(self) }
@@ -212,7 +212,7 @@ fn audit_ui<S, M: Clone>(ui: &mut Ui<S, M>, o: &mut Offscreen, look: &Look, px: 
     let size = ui.device_size();
     let (px, ground) = (&crate::audit::unbend(px, size, bend)[..], crate::audit::unbend(&ground, size, bend));
     let plain = plain.map(|(p, pg)| (crate::audit::unbend(&p, size, bend), crate::audit::unbend(&pg, size, bend)));
-    let mut f = match preset { Some(p) => crate::audit::audit_under(ui, px, &ground, &look.theme, &p.name, &p.rules), None => crate::audit::audit(ui, px, &ground) };
+    let mut f = match preset { Some(p) => crate::audit::audit_under(ui, px, &ground, &look.theme, p), None => crate::audit::audit(ui, px, &ground, &look.theme) };
     // Text the bend carries off the frame is clipped too (where layout has not clipped it already).
     for b in crate::audit::bent_off(ui, bend) {
         if !f.iter().any(|d| d.key == b.key && d.kind == crate::audit::Kind::Clipped) { f.push(b); }

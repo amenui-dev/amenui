@@ -135,7 +135,8 @@ fn in_a_preview_a_skip_link_covers_what_is_under_it_and_a_sheet_keeps_inside_the
     ui.invalidate();
     let ground = o.render(&mut ui, &look);
     o.r.hide_glyphs = false;
-    let found = amenui::audit::audit(&mut ui, &px, &ground);
+    let theme = ui.look().theme;
+    let found = amenui::audit::audit(&mut ui, &px, &ground, &theme);
     let p0: Vec<_> = found.iter().filter(|f| f.level == amenui::audit::Level::P0).collect();
     assert!(p0.is_empty(), "P0 findings in the previews: {p0:?}");
     // Within the skip link's fill there is only its own label: the frame there is the frame without the

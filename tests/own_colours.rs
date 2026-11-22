@@ -111,7 +111,8 @@ fn off_a_picture_its_own_colours_are_hue_0_and_reported() {
     let mut u = open(Page::default());
     assert!(u.problems().iter().any(|p| matches!(p, ViewProblem::OwnColourOffPicture { key } if key == "rays")), "reported: {:?}", u.problems());
     let f = render(&mut o, &mut u);
-    let audit = amenui::audit::audit(&mut u, &f, &f);
+    let th = u.look().theme;
+    let audit = amenui::audit::audit(&mut u, &f, &f, &th);
     assert!(audit.iter().any(|a| a.level == amenui::audit::Level::P1 && a.fix.contains("rays") && a.fix.contains("palette")), "the audit: {audit:?}");
     // The tip line in the theme's first accent.
     let got = px(&f, 200, 100);

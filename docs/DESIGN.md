@@ -3111,9 +3111,9 @@ one frame each on black and paper, to compare side by side with the reference).
 ### 1.31 The audit
 
 One command says what is wrong with a page as drawn: `render --page <name> --audit` prints a list of findings, most
-serious first, and with `--strict` a P0 or P1 is an error. `amenui::audit::audit(ui, px, ground)` takes a
+serious first, and with `--strict` a P0 or P1 is an error. `amenui::audit::audit(ui, px, ground, theme)` takes a
 deterministic frame's pixels, the same frame drawn with every glyph hidden (the ground under the text, before the
-finishing pass) and the runtime that drew them, and returns `Vec<Finding>` (`level`, `key`, `kind`, `measured`,
+finishing pass), the runtime that drew them and the theme they were drawn in, and returns `Vec<Finding>` (`level`, `key`, `kind`, `measured`,
 `limit`, `fix`); `drive::audit(spec, faces, o)` renders a page and audits it, `drive::audit_with` for an
 application's own pages (`Driven::audit`). The view's structural problems (`Ui::problems()`) are on the same list as P1 `Structure`.
 Everything is measured; each `fix` is one sentence to act on, naming the element and the number.
@@ -3128,9 +3128,14 @@ Everything is measured; each `fix` is one sentence to act on, naming the element
 | `Restless` | after the last input, the clock run on at 60 Hz: still asking for frame after frame 2 s later with nothing visible marked `El::ongoing()` (a timed wake now and then, such as a caret's blink, is not restless) | P1 |
 
 **A preset's rules** (`Preset::rules`, `preset::Rule`). A preset can hold its pages to more than the floors above,
-and only to more: five rules, each measured on the same frame, and `audit::audit_under(ui, px, ground, theme, name,
-rules)` adds them to the audit. `render --preset <hash|file.json>` draws the page in a preset and audits it by
-its rules (`drive::in_preset` wraps an opener so, for `render_with`, `audit_with` and `frames`).
+and only to more: five rules, each measured on the same frame, and `audit::audit_under(ui, px, ground, theme,
+preset)` adds them to the audit. `render --preset <hash|file.json>` draws the page in a preset and audits it by
+its rules (`drive::in_preset` wraps an opener so, for `render_with`, `audit_with` and `frames`). A page that draws a
+preset in part of the window marks that subtree `El::audit_under(preset)`: what is in it is held to that preset's
+rules (and the accent's share is of its box), the rest to the page's preset if it is audited under one, else to the
+floors alone; a nearer mark inside wins. `audit::audit` reads the marks from the runtime, so a page audited through
+any wrapper is held to them. `Driven::audit` and `Driven::audit_under` have no default: a wrapper forwards both, or
+does not build.
 
 | rule | what is measured | finding |
 |---|---|---|

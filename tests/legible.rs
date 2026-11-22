@@ -207,7 +207,8 @@ fn the_audit_finds_no_label_it_cannot_read() {
         ui.invalidate();
         let ground = o.render(&mut ui, &l);
         o.r.hide_glyphs = false;
-        let f = amenui::audit::audit(&mut ui, &px, &ground);
+        let theme = ui.look().theme;
+        let f = amenui::audit::audit(&mut ui, &px, &ground, &theme);
         let bad: Vec<_> = f.iter().filter(|f| f.key == "label" && f.kind == amenui::audit::Kind::Contrast && f.level <= amenui::audit::Level::P1).collect();
         assert!(bad.is_empty(), "{m:?} {} {k}: {bad:?}", if dark { "dark" } else { "light" });
     } } }

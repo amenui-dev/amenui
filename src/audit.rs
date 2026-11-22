@@ -99,9 +99,13 @@ pub const MIN_INK: f32 = 0.85;
 pub fn fails(f: &[Finding]) -> bool { f.iter().any(|f| f.level <= Level::P1) }
 
 /// Audit the frame the runtime last drew: `px` its RGBA8 pixels, `ground` the same frame drawn with
-/// every glyph transparent (`Renderer::hide_glyphs`), both at the runtime's device size. The page's
-/// restlessness is a separate measurement (`restless`), since it needs the clock to run.
-pub fn audit<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8]) -> Vec<Finding> {
+/// every glyph transparent (`Renderer::hide_glyphs`), both at the runtime's device size, `theme` the
+/// theme it was drawn in. A subtree marked `El::audit_under` is held to that preset's rules too. The
+/// page's restlessness is a separate measurement (`restless`), since it needs the clock to run.
+pub fn audit<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: &crate::style::Theme) -> Vec<Finding> { audit_in(ui, px, ground, theme, None) }
+
+/// The audit's own floors, for the whole page.
+fn floors<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8]) -> Vec<Finding> {
     let mut out: Vec<Finding> = ui.problems().into_iter().map(|p| Finding { level: Level::P1, key: String::new(), kind: Kind::Structure, measured: 1.0, limit: 0.0, fix: p.to_string() }).collect();
     clipped(ui, &mut out);
     contrast(ui, px, ground, &mut out);
@@ -586,24 +590,51 @@ fn columns(c: char) -> usize {
     if wide { 2 } else { 1 }
 }
 
-/// The audit (`audit`) of a page drawn in a preset: `by` its name, `rules` its rules, `theme` the theme it
-/// was drawn in. Each rule is measured on the same frame; where a rule and the audit's own floor find the
-/// same thing in the same element, one finding is kept: the rule's, a P1 (a P0 where the floor found a P0).
-pub fn audit_under<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: &crate::style::Theme, by: &str, rules: &[crate::preset::Rule]) -> Vec<Finding> {
-    let mut out = audit(ui, px, ground);
-    let found = rules_found(ui, px, ground, theme, by, rules);
-    for f in found {
-        let level = match out.iter().position(|d| d.key == f.key && d.kind == f.kind) {
-            Some(k) => { let l = out.remove(k).level; if l == Level::P0 { Level::P0 } else { Level::P1 } }
-            None => Level::P1,
-        };
-        out.push(Finding { level, ..f });
+/// The audit (`audit`) of a page drawn in `preset`: its rules measured on the same frame too, for the
+/// page apart from subtrees audited under another (`El::audit_under`). Where a rule and the audit's own
+/// floor find the same thing in the same element, one finding is kept: the rule's, a P1 (a P0 where the
+/// floor found a P0).
+pub fn audit_under<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: &crate::style::Theme, preset: &crate::preset::Preset) -> Vec<Finding> {
+    audit_in(ui, px, ground, theme, Some(preset))
+}
+
+fn audit_in<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: &crate::style::Theme, page: Option<&crate::preset::Preset>) -> Vec<Finding> {
+    let mut out = floors(ui, px, ground);
+    // Each preset and the elements held to it: the page's for what no `El::audit_under` covers, and each
+    // subtree's (from its root, the one whose parent is under another or none) with the device px box it
+    // shows, for the accent's share.
+    let s = ui.scale();
+    let nodes = ui.nodes();
+    let mut scopes: Vec<Held> = vec![];
+    if let Some(p) = page { scopes.push(Held { preset: std::rc::Rc::new(p.clone()), within: nodes.iter().map(|n| n.audit_under.is_none()).collect(), area: None }); }
+    let same = |a: &Option<std::rc::Rc<crate::preset::Preset>>, b: &std::rc::Rc<crate::preset::Preset>| a.as_ref().is_some_and(|a| std::rc::Rc::ptr_eq(a, b));
+    for n in nodes {
+        let Some(p) = &n.audit_under else { continue };
+        if n.parent.is_some_and(|q| same(&nodes[q].audit_under, p)) { continue; }
+        let b = n.rect.intersect(&n.clip);
+        let area = [(b.x * s).max(0.0) as usize, (b.y * s).max(0.0) as usize, (b.right() * s).max(0.0).round() as usize, (b.bottom() * s).max(0.0).round() as usize];
+        scopes.push(Held { preset: p.clone(), within: nodes.iter().map(|m| same(&m.audit_under, p)).collect(), area: Some(area) });
+    }
+    for held in &scopes {
+        for f in rules_found(ui, px, ground, theme, held) {
+            let level = match out.iter().position(|d| d.key == f.key && d.kind == f.kind) {
+                Some(k) => { let l = out.remove(k).level; if l == Level::P0 { Level::P0 } else { Level::P1 } }
+                None => Level::P1,
+            };
+            out.push(Finding { level, ..f });
+        }
     }
     sort(&mut out);
     out
 }
 
-fn rules_found<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: &crate::style::Theme, by: &str, rules: &[crate::preset::Rule]) -> Vec<Finding> {
+/// A preset and what is held to it: `within` by node index, and `area` for the accent's share (device px:
+/// left, top, right, bottom; `None`: the frame).
+struct Held { preset: std::rc::Rc<crate::preset::Preset>, within: Vec<bool>, area: Option<[usize; 4]> }
+
+/// The rules of `held`'s preset found on the elements it holds.
+fn rules_found<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: &crate::style::Theme, held: &Held) -> Vec<Finding> {
+    let (by, rules, within, area) = (held.preset.name.as_str(), &held.preset.rules[..], &held.within[..], held.area);
     use crate::preset::{Of, Rule};
     let mut out = vec![];
     let s = ui.scale();
@@ -614,6 +645,7 @@ fn rules_found<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: 
     });
     if prose_min.is_some() || read_min.is_some() {
         for (i, line, r) in line_contrast(ui, px, ground) {
+            if !within[i] { continue; }
             // Large text's floor is 3:1, which the base rule holds it to; a preset's floors are for the rest.
             if !ui.nodes()[i].legible || is_mark(ui, i) || is_large(ui, i) { continue; }
             let prose = prose_min.filter(|_| is_prose(ui, i, theme));
@@ -633,19 +665,24 @@ fn rules_found<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: 
         match *rule {
             Rule::Contrast { .. } => {}
             Rule::TextSize { min } => for (i, size, least) in heights(ui) {
+                if !within[i] { continue; }
                 let drawn = least / s;
                 if drawn < min - 1e-3 {
                     out.push(Finding { level: Level::P1, key: ui.nodes()[i].key.clone(), kind: Kind::Small, measured: drawn, limit: min,
                         fix: format!("drawn {drawn:.1} px tall ({by} needs {min}): set it at {:.0} px or more, or let it be decoration (`.legible(false)`)", (size * min / drawn).ceil()) });
                 }
             },
-            Rule::Margin { min } => margin(ui, by, min, &mut out),
-            Rule::Measure { max } => measure(ui, theme, by, max, &mut out),
+            Rule::Margin { min } => margin(ui, by, min, within, &mut out),
+            Rule::Measure { max } => measure(ui, theme, by, max, within, &mut out),
             Rule::Accent { max } => {
-                let n = px.len() / 4;
-                if n == 0 { continue; }
+                let (fw, fh) = ui.device_size();
+                let (fw, fh) = (fw as usize, fh as usize);
+                let [x0, y0, x1, y1] = area.unwrap_or([0, 0, fw, fh]);
+                let (x1, y1) = (x1.min(fw), y1.min(fh));
+                let n = x1.saturating_sub(x0) * y1.saturating_sub(y0);
+                if n == 0 || px.len() < fw * fh * 4 { continue; }
                 let a = theme.accent.map(|v| (v * 255.0).round() as i32);
-                let hit = px.chunks_exact(4).filter(|q| (0..3).all(|k| (q[k] as i32 - a[k]).abs() <= 24)).count();
+                let hit = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (y * fw + x) * 4)).filter(|&o| (0..3).all(|k| (px[o + k] as i32 - a[k]).abs() <= 24)).count();
                 let share = hit as f32 / n as f32;
                 if share > max {
                     out.push(Finding { level: Level::P1, key: String::new(), kind: Kind::Accent, measured: share, limit: max,
@@ -660,12 +697,12 @@ fn rules_found<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: 
 /// `Rule::Margin`: each text to read whose ink comes nearer than `min` logical px to an edge of the
 /// window. Text in a scroll view is measured from the left and the right, and from the top while its
 /// scroll view is at the top; never from the bottom.
-fn margin<S, M: Clone>(ui: &Ui<S, M>, by: &str, min: f32, out: &mut Vec<Finding>) {
+fn margin<S, M: Clone>(ui: &Ui<S, M>, by: &str, min: f32, within: &[bool], out: &mut Vec<Finding>) {
     const SIDES: [(&str, &str, &str); 4] = [("left", "right", "left"), ("top", "down", "top"), ("right", "left", "right"), ("bottom", "up", "bottom")];
     let s = ui.scale();
     let (w, h) = ui.logical_size();
     let glyphs = ui.glyphs();
-    for i in reading(ui) {
+    for i in reading(ui).into_iter().filter(|&i| within[i]) {
         let mut b = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
         for g in glyphs.log.iter().filter(|g| g.node == i) {
             let Some(inst) = ui.scene().instances.get(g.inst) else { continue };
@@ -693,8 +730,8 @@ fn margin<S, M: Clone>(ui: &Ui<S, M>, by: &str, min: f32, out: &mut Vec<Finding>
 }
 
 /// `Rule::Measure`: the longest line of each running text (`is_prose`), in characters (wide ones count 2).
-fn measure<S, M: Clone>(ui: &mut Ui<S, M>, theme: &crate::style::Theme, by: &str, max: f32, out: &mut Vec<Finding>) {
-    for i in reading(ui) {
+fn measure<S, M: Clone>(ui: &mut Ui<S, M>, theme: &crate::style::Theme, by: &str, max: f32, within: &[bool], out: &mut Vec<Finding>) {
+    for i in reading(ui).into_iter().filter(|&i| within[i]) {
         if !is_prose(ui, i, theme) { continue; }
         let lines = ui.line_texts(i);
         let Some((k, n)) = lines.iter().map(|l| l.trim_end().chars().map(columns).sum::<usize>()).enumerate().max_by_key(|x| x.1) else { continue };

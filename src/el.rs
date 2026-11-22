@@ -795,10 +795,12 @@ pub struct Props {
     pub steps: bool,
     /// What its handlers send changes only it and the elements that step (`El::local_messages`).
     pub local_messages: bool,
+    /// The preset its subtree is audited under (`El::audit_under`).
+    pub audit_under: Option<Rc<crate::preset::Preset>>,
 }
 impl Props {
     #[inline(never)]
-    fn new(style: Style, content: Content) -> Self { Props { key: String::new(), style, content, fill: None, fill_on: PaintOn { hover: None, held: None, border_hover: None }, border: None, radius: 0.0, focusable: false, tab_order: 0, skip_to: None, focus_shown: false, scroll: false, horizontal: false, bar: false, reveal: false, disabled: false, commit: false, fonts: None, loose: 0.0, wipe: None, flow: None, hidden: false, shift: (0.0, 0.0), shed: None, flow_field: None, stirr: None, trace: None, annotate: None, gaze_scope: false, material: None, loosen: 0.0, anchor: None, clips: false, calm: false, map_life: None, multiline: false, selectable: false, cursor: None, ripple: Ripple::default(), guide: None, skeleton: false, rtl: None, decode: None, form: None, turn: 0.0, reveal_by: Reveal::Glyph, ongoing: false, pass: false, opacity: 1.0, commit_scope: false, preview: false, fit: None, clamp: 0, plate: None, cached: false, clip_radius: 0.0, own_size: None, grain: false, bloom: false, show_clear: None, pen: 1.0, view_scale: None, stage: false, stack: false, steps: false, local_messages: false } }
+    fn new(style: Style, content: Content) -> Self { Props { key: String::new(), style, content, fill: None, fill_on: PaintOn { hover: None, held: None, border_hover: None }, border: None, radius: 0.0, focusable: false, tab_order: 0, skip_to: None, focus_shown: false, scroll: false, horizontal: false, bar: false, reveal: false, disabled: false, commit: false, fonts: None, loose: 0.0, wipe: None, flow: None, hidden: false, shift: (0.0, 0.0), shed: None, flow_field: None, stirr: None, trace: None, annotate: None, gaze_scope: false, material: None, loosen: 0.0, anchor: None, clips: false, calm: false, map_life: None, multiline: false, selectable: false, cursor: None, ripple: Ripple::default(), guide: None, skeleton: false, rtl: None, decode: None, form: None, turn: 0.0, reveal_by: Reveal::Glyph, ongoing: false, pass: false, opacity: 1.0, commit_scope: false, preview: false, fit: None, clamp: 0, plate: None, cached: false, clip_radius: 0.0, own_size: None, grain: false, bloom: false, show_clear: None, pen: 1.0, view_scale: None, stage: false, stack: false, steps: false, local_messages: false, audit_under: None } }
 }
 impl<M> std::ops::Deref for El<M> { type Target = Props; fn deref(&self) -> &Props { &self.props } }
 impl<M> std::ops::DerefMut for El<M> { fn deref_mut(&mut self) -> &mut Props { &mut self.props } }
@@ -1391,6 +1393,11 @@ impl<M> El<M> {
     /// dragged by their offsets). A message that changes anything outside them is not shown until the
     /// page is next laid out.
     pub fn local_messages(mut self) -> Self { self.local_messages = true; self }
+    /// The audit holds this subtree to `preset`'s rules (`preset::Rule`) as well as its own floors, as
+    /// `render --preset` holds a page: for a page that draws a preset in part of the window (a preset's
+    /// specimen beside controls drawn in the page's own look). What is outside it is held to the rules
+    /// of the preset the page is audited under, if any, else to the audit's own; a nearer one inside wins.
+    pub fn audit_under(mut self, preset: &crate::preset::Preset) -> Self { self.audit_under = Some(Rc::new(preset.clone())); self }
     /// A view of a drawing at scale `s` (a map that grows from a thumbnail to a window): everything this
     /// container holds is scaled as by `El::zoom` (positions, lengths, fills, corner radii, a drawing's
     /// dots) except the pen: the widths of lines (a drawing's strokes, a trace), of borders, and a trace's
