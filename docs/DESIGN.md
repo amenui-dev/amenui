@@ -2231,6 +2231,12 @@ against what the renderer counted.
 `fasthash::FastHasher`, a folded-multiply word hash (as foldhash and ahash mix), not the standard library's
 SipHash, which cost about 0.4 ms a frame in wasm on the M1 when the components page laid out; none of those
 keys is chosen by an attacker.
+A paint that follows no new view (a scroll step) allocates little: the lists a text element's glyphs go through are
+kept between paints (`TextScratch`), the layout cache is looked up by the text's hash with the text kept in the
+entry (`Text::layout`), the field map is compared with the window's grid before one is built (`FieldMap::fit`), and
+a recording text that is the same text only takes its new place and glyphs (`Ui::recompose_jobs`, one index of the
+scene for all of them). On the /components/ index a scroll step went from about 2,240 allocations (1.06 MB) to
+1,480 (0.49 MB).
 
 **What pointer movement costs**: moving the pointer neither lays out nor shapes text. Parallax uses
 `El::shift(dx, dy)` (the whole subtree moves after layout, outside taffy's styles); the lens is counted in the

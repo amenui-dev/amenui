@@ -186,6 +186,10 @@ struct Slot { x: u32, y: u32, w: u32, h: u32, left: i32, top: i32 }
 
 /// Text, face, size bits, line bits, width bits, what it flows around, tracking bits.
 type MeasureKey = (String, u8, u32, u32, u32, u64, u32);
+/// A layout's key: `MeasureKey` with the text's hash in place of the text, so a look-up allocates nothing;
+/// the entry keeps the text, and one whose text is not the one asked for is a miss.
+type LayoutKey = (u64, u8, u32, u32, u32, u64, u32);
+type Laid = (Box<str>, Rc<Layout<()>>);
 /// A text's pieces for `El::reveal_by`: each piece's boxes.
 pub type Pieces = Rc<Vec<Vec<crate::ui::Rect>>>;
 
@@ -251,7 +255,7 @@ pub struct Text {
     measured: HashMap<MeasureKey, (f32, f32)>,
     /// Shaped and broken paragraphs by text, face, size, line height, width and obstacles: this
     /// generation's and the last one's (a paragraph not used for a whole generation is dropped).
-    cache: [HashMap<MeasureKey, Rc<Layout<()>>>; 2],
+    cache: [HashMap<LayoutKey, Laid>; 2],
     /// Each text's pieces for `El::reveal_by` from its content box's corner, by the layout's key and
     /// how it is cut; kept in two generations as the layouts are.
     pieces: [HashMap<(MeasureKey, u8), Pieces>; 2],
@@ -417,26 +421,28 @@ impl Text {
         let Setting { around, track } = set;
         self.note(face);
         let max_width = max_width.filter(|w| w.is_finite());
-        let k = (s.to_owned(), face, size.to_bits(), line.to_bits(), max_width.unwrap_or(-1.0).to_bits(), around.map_or(0, Around::id), track.to_bits());
-        if let Some(l) = self.cache[0].get(&k) { return l.clone(); }
-        if let Some(l) = self.cache[1].remove(&k) { self.cache[0].insert(k, l.clone()); return l; }
+        let h = { use std::hash::{Hash, Hasher}; let mut h = crate::fasthash::FastHasher::default(); s.hash(&mut h); h.finish() };
+        let k = (h, face, size.to_bits(), line.to_bits(), max_width.unwrap_or(-1.0).to_bits(), around.map_or(0, Around::id), track.to_bits());
+        let of = |e: Option<&Laid>| e.filter(|e| &*e.0 == s).map(|e| e.1.clone());
+        if let Some(l) = of(self.cache[0].get(&k)) { return l; }
+        if let Some(e) = self.cache[1].remove(&k) && &*e.0 == s { let l = e.1.clone(); self.cache[0].insert(k, e); return l; }
         // Text that fits on its line without breaking is laid out the same at any width it fits in: the
         // unbounded layout serves (what layout measured is what is drawn).
+        let free = (k.0, k.1, k.2, k.3, (-1.0f32).to_bits(), k.5, k.6);
         if let Some(w) = max_width && around.is_none() {
-            let free = (k.0.clone(), k.1, k.2, k.3, (-1.0f32).to_bits(), k.5, k.6);
-            let l = self.cache[0].get(&free).or_else(|| self.cache[1].get(&free)).cloned();
+            let l = of(self.cache[0].get(&free)).or_else(|| of(self.cache[1].get(&free)));
             if let Some(l) = l && l.width() <= w && !s.contains('\n') {
-                self.cache[0].insert(k, l.clone());
+                self.cache[0].insert(k, (s.into(), l.clone()));
                 return l;
             }
         }
         if self.cache[0].len() >= LAYOUT_CACHE { self.cache.swap(0, 1); self.cache[0].clear(); }
         let l = Rc::new(self.shape(s, face, size, line, max_width, set));
         // One line that did not need breaking is also the unbounded layout (see above).
-        if max_width.is_some() && around.is_none() && l.lines().count() <= 1 && !s.contains('\n') {
-            self.cache[0].entry((k.0.clone(), k.1, k.2, k.3, (-1.0f32).to_bits(), k.5, k.6)).or_insert_with(|| l.clone());
+        if max_width.is_some() && around.is_none() && l.lines().count() <= 1 && !s.contains('\n') && of(self.cache[0].get(&free)).is_none() {
+            self.cache[0].insert(free, (s.into(), l.clone()));
         }
-        self.cache[0].insert(k, l.clone());
+        self.cache[0].insert(k, (s.into(), l.clone()));
         l
     }
     /// Shape and break `s` at `size` logical px. Measuring and drawing use this same layout, so the
@@ -837,9 +843,8 @@ impl Text {
             let hyphen = Self::hyphenated(&p, ln.text_range().end);
             let lm = ln.metrics();
             let (lx, lw) = (ox + lm.offset * scale, (lm.advance * scale).max(1.0));
-            let items: Vec<_> = ln.items().collect();
-            let last_run = items.iter().rposition(|i| matches!(i, PositionedLayoutItem::GlyphRun(_)));
-            for (ii, item) in items.into_iter().enumerate() {
+            let last_run = ln.items().enumerate().filter(|(_, i)| matches!(i, PositionedLayoutItem::GlyphRun(_))).last().map(|(k, _)| k);
+            for (ii, item) in ln.items().enumerate() {
                 let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
                 let run = gr.run();
                 let font = run.font();
@@ -848,14 +853,10 @@ impl Text {
                 // pixel text is drawn as an outline.
                 let pixel = !fine && self.families.iter().any(|f| f.pixel.is_some() && f.blob == font.data.id());
                 let fsize = run.font_size() * scale;
-                let coords: Vec<i16> = run.normalized_coords().iter().map(|c| c.to_bits()).collect();
-                let mut scaler = self.scaler.builder(fref).size(fsize).hint(false).normalized_coords(coords.iter().copied()).build();
+                let mut scaler = self.scaler.builder(fref).size(fsize).hint(false).normalized_coords(run.normalized_coords().iter().map(|c| c.to_bits())).build();
                 // The hyphen of a hyphenated line: one more glyph after the run's last.
-                let mut glyphs: Vec<parley::Glyph> = gr.positioned_glyphs().collect();
-                if hyphen && Some(ii) == last_run && let Some(g) = glyphs.last().copied() {
-                    glyphs.push(parley::Glyph { id: fref.charmap().map('-') as u32, x: g.x + g.advance, ..g });
-                }
-                for g in glyphs {
+                let hy = if hyphen && Some(ii) == last_run { gr.positioned_glyphs().last().map(|g| parley::Glyph { id: fref.charmap().map('-') as u32, x: g.x + g.advance, ..g }) } else { None };
+                for g in gr.positioned_glyphs().chain(hy) {
                     let (gx, gy) = (ox + g.x * scale, (oy + g.y * scale).round());
                     let gx = if pixel { gx.round() } else { gx };
                     let sub = if pixel { 0 } else { ((gx.fract() * 4.0) as u8).min(3) };

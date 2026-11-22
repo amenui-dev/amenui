@@ -252,8 +252,7 @@ impl FieldMap {
     /// than `MAX_NODES` along a side). Node (i, j) is at (i × cell, j × cell); one extra node past each
     /// far edge, so every point of the window has four nodes around it.
     pub fn new(w: f32, h: f32, cell: f32) -> Self {
-        let cell = cell.max(1.0).max(w / (MAX_NODES - 2) as f32).max(h / (MAX_NODES - 2) as f32);
-        let (cols, rows) = ((w / cell).floor() as usize + 2, (h / cell).floor() as usize + 2);
+        let (cols, rows, cell) = Self::grid(w, h, cell);
         let n = cols * rows;
         let mut m = Self { cols, rows, cell, e: vec![0.0; n], u: vec![0.0; n], v: vec![0.0; n], ink: vec![0.0; n], put_e: vec![0.0; n], put_f: vec![0.0; n], age: vec![0.0; n], acc: 0.0, clock: 0.0, calm: vec![], reduced: false, written: false, lives: vec![], gusts: vec![], snap: Snapshot::default(), scratch: Default::default() };
         m.encode();
@@ -262,13 +261,18 @@ impl FieldMap {
     /// Fit the map to a window and a cell size: a new size starts over at zero (it is a picture of the
     /// moment, not data). Whether it changed.
     pub fn fit(&mut self, w: f32, h: f32, cell: f32) -> bool {
+        if Self::grid(w, h, cell) == (self.cols, self.rows, self.cell) { return false; }
         let fresh = Self::new(w, h, cell);
-        if (fresh.cols, fresh.rows, fresh.cell) == (self.cols, self.rows, self.cell) { return false; }
         let (reduced, written) = (self.reduced, self.written);
         *self = fresh;
         self.reduced = reduced;
         self.written = written;
         true
+    }
+    /// The columns, rows and cell size of a map of a window.
+    fn grid(w: f32, h: f32, cell: f32) -> (usize, usize, f32) {
+        let cell = cell.max(1.0).max(w / (MAX_NODES - 2) as f32).max(h / (MAX_NODES - 2) as f32);
+        ((w / cell).floor() as usize + 2, (h / cell).floor() as usize + 2, cell)
     }
     fn idx(&self, i: usize, j: usize) -> usize { j * self.cols + i }
     /// Nothing in the box `b` (logical px, x0, y0, x1, y1) any more: the energy and flow of every node

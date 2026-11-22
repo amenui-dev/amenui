@@ -422,6 +422,10 @@ struct Recomp { tiles: Vec<RTile>, start: f32, end: f32, hide: HashSet<u64>, kee
 struct Slide { from: [f32; 4], clip: [f32; 4], start: f32, dur: f32 }
 /// A recomposition found while painting, worked out after the scene is built.
 struct RecJob { node: usize, rec: TextRec }
+/// The lists a text element's glyphs go through on their way into the scene, kept between paints so a
+/// paint of a page of text (every scroll step) does not allocate them for each element again.
+#[derive(Default)]
+struct TextScratch { glyphs: Vec<(Instance, u32)>, swept: Vec<f32>, pens: Vec<[f32; 3]>, posed: Vec<crate::form::Posed>, out: Vec<(Instance, u32)>, chosen: Vec<bool> }
 /// What a cached subtree (`El::cached`) last drew besides its instances, kept so a paint in which nothing
 /// it draws from changed (`sig`, `Ui::keep_sig`) passes it by: its identities' births, its texts' births and
 /// recomposition records, its texts' laid glyphs (by node, from its root), and its latest birth and
@@ -874,6 +878,7 @@ pub struct Ui<S, M> {
     mesh_hover: Option<(String, Option<crate::mesh::MeshHit>)>,
     /// The glyphs of the last paint, for hits and the audit (`hit::Glyphs`).
     glyphs: crate::hit::Glyphs,
+    text_scratch: TextScratch,
     /// Preparation that runs in the frames' spare time (`Ui::prepare`), and how ready the renderer is.
     prep: crate::warmup::Prepare<S>,
     /// The element whose `on_move` heard the pointer last.
@@ -1248,7 +1253,7 @@ impl<S, M: Clone> Ui<S, M> {
             tree: TaffyTree::new(), tids: HashMap::default(), mkeys: HashMap::default(), moved: HashMap::default(), virt_views: HashMap::default(), virt_made: HashMap::default(), stack_w: HashMap::default(),
             scrolling: Scrolling::default(), touch: None, touches: HashSet::default(), touching: false, fling: None, over: HashMap::default(), motion: HashMap::default(), scroll_paint: false, event_t: None, ev: 0.0,
             recs: HashMap::default(), recomps: HashMap::default(), slides: HashMap::default(), no_recompose: false,
-            meshes: crate::mesh::Library::default(), mesh_hover: None, glyphs: Default::default(), prep: Default::default(), move_over: None, particle_gpu: false, motes: vec![], shed_at: HashMap::default(), shed_owed: HashMap::default(), field_marks: HashMap::default(), seen: HashMap::default(), outlines: HashMap::default(), pens_told: HashMap::default(), pens_found: vec![], decodes: HashMap::default(), decode_last: HashMap::default(), last_morph: None, left: Default::default(), queued: vec![], flushing: false, coalesce: false, defer: 0, stale_layout: false, stale_from: None, wheel_latch: None, laid: (0, None), stale_paint: false, fill_state: None, motes_made: 0,
+            meshes: crate::mesh::Library::default(), mesh_hover: None, glyphs: Default::default(), text_scratch: TextScratch::default(), prep: Default::default(), move_over: None, particle_gpu: false, motes: vec![], shed_at: HashMap::default(), shed_owed: HashMap::default(), field_marks: HashMap::default(), seen: HashMap::default(), outlines: HashMap::default(), pens_told: HashMap::default(), pens_found: vec![], decodes: HashMap::default(), decode_last: HashMap::default(), last_morph: None, left: Default::default(), queued: vec![], flushing: false, coalesce: false, defer: 0, stale_layout: false, stale_from: None, wheel_latch: None, laid: (0, None), stale_paint: false, fill_state: None, motes_made: 0,
             fmap: crate::fieldmap::FieldMap::default(), stirr_at: HashMap::default(), fmap_size: (0.0, 0.0), fmap_ink: u64::MAX, fmap_inks: HashMap::default(), strand_faded: HashMap::default(), strand_cache: HashMap::default(), strand_hold: HashMap::default(), strand_drawn: vec![], trace_drawn: vec![], leaders: vec![], echoes: HashMap::default(), echo_at: f32::NEG_INFINITY, frozen: None, trace_head: HashMap::default(),
         };
         ui.resize(w, h, scale);
@@ -4006,6 +4011,7 @@ impl<S, M: Clone> Ui<S, M> {
         let global = self.timing.material;
         let mut caret_found: Option<(usize, [f32; 4])> = kept.as_ref().and(self.caret).filter(|c| kept.as_ref().is_some_and(|k| !k.has(&self.nodes, c.0))).map(|(i, _, r)| (i, r));
         let mut jobs: Vec<RecJob> = vec![];
+        let mut tx = std::mem::take(&mut self.text_scratch);
         let mut seen_recs: HashSet<String> = if kept.is_some() { self.recs.keys().cloned().collect() } else { HashSet::default() };
         let ro = self.sel_ranges();
         // A scroll node pulled past its end: what is near that edge loosens, the more the further it is
@@ -4282,13 +4288,14 @@ impl<S, M: Clone> Ui<S, M> {
                     // Lines the clip hides are not made into instances at all (posed glyphs go elsewhere: all
                     // of them are posed, and those the clip hides then left out).
                     let rows = if pose.is_some() { None } else { Some((clip[1], clip[3])) };
-                    let mut glyphs: Vec<(Instance, u32)> = vec![];
+                    let TextScratch { glyphs, swept, pens, posed, out, chosen } = &mut tx;
+                    glyphs.clear();
+                    swept.clear();
+                    pens.clear();
                     // A face arriving (DESIGN.md §1.6.5) sweeps along each line of text on screen.
                     let window = Rect::new(0.0, 0.0, self.size.0, self.size.1);
                     let arriving = self.arriving.get(&para.face).copied().filter(|_| { let r = n.rect.intersect(&n.clip).intersect(&window); r.w > 0.0 && r.h > 0.0 });
-                    let mut swept: Vec<f32> = vec![];
-                    // Each glyph's pen as laid out (device px: x, baseline, advance), for a pose.
-                    let mut pens: Vec<[f32; 3]> = vec![];
+                    // `pens`: each glyph's pen as laid out (device px: x, baseline, advance), for a pose.
                     match arriving {
                         None => self.text.emit_pens(para, n.origin(), proto, s, rows, |mut inst, glyph, p| { inst.extra[0] = wpx; glyphs.push((inst, glyph)); pens.push([p[0], p[1], p[4]]); }),
                         Some((t0, d)) => {
@@ -4309,7 +4316,8 @@ impl<S, M: Clone> Ui<S, M> {
                     if n.on_pens.is_some() && arriving.is_none() && pens.len() == glyphs.len() { self.pens_found.push((i, pens.iter().map(|p| p[0] / s - ox).collect())); }
                     let centre = |g: &Instance| ((g.rect[0] + g.rect[2] * 0.5) / s - ox, (g.rect[1] + g.rect[3] * 0.5) / s - oy);
                     let laid: Vec<(f32, f32)> = glyphs.iter().map(|(g, _)| centre(g)).collect();
-                    let mut posed: Vec<crate::form::Posed> = glyphs.iter().enumerate().map(|(k, (g, gid))| crate::form::Posed { inst: *g, glyph: *gid, seq: k, z: 0.0, facing: 1.0, at: laid[k], group: None }).collect();
+                    posed.clear();
+                    posed.extend(glyphs.iter().enumerate().map(|(k, (g, gid))| crate::form::Posed { inst: *g, glyph: *gid, seq: k, z: 0.0, facing: 1.0, at: laid[k], group: None }));
                     // Glyphs drawn by their poses (on a path, a sphere, under a light, on a form): each keeps
                     // its outline and is moved, turned and scaled as a whole (DESIGN.md §1.26).
                     if let Some(f) = pose {
@@ -4332,25 +4340,28 @@ impl<S, M: Clone> Ui<S, M> {
                             (g.z, g.facing) = (p.z, p.facing);
                         }
                     }
-                    if let (Some(fx), true) = (&n.form, pose.is_some()) { crate::form::face(&mut posed, fx); }
+                    if let (Some(fx), true) = (&n.form, pose.is_some()) { crate::form::face(posed, fx); }
                     // Whole words or lines (`El::reveal_by`): a pose fades a word as one, and a word the
                     // clip or the window cuts is not drawn at all.
                     if n.reveal_by != crate::el::Reveal::Glyph {
                         // The pieces from the content box's corner, kept while the text is the same.
                         let groups = self.text.reveal_pieces(para, n.reveal_by);
                         let window = [0.0, 0.0, self.size.0 * s, self.size.1 * s];
-                        crate::form::reveal_whole(&mut posed, &groups, (0.0, 0.0), [clip[0].max(window[0]), clip[1].max(window[1]), clip[2].min(window[2]), clip[3].min(window[3])]);
+                        crate::form::reveal_whole(posed, &groups, (0.0, 0.0), [clip[0].max(window[0]), clip[1].max(window[1]), clip[2].min(window[2]), clip[3].min(window[3])]);
                     }
-                    if pose.is_some() || n.reveal_by != crate::el::Reveal::Glyph { crate::form::arrange(&mut posed, n.form.as_ref().filter(|_| pose.is_some()), &self.text.pixels); }
+                    if pose.is_some() || n.reveal_by != crate::el::Reveal::Glyph { crate::form::arrange(posed, n.form.as_ref().filter(|_| pose.is_some()), &self.text.pixels); }
                     if pose.is_some() { posed.retain(|g| { let b = g.inst.bounds(0.0); b[0] < clip[2] && b[2] > clip[0] && b[1] < clip[3] && b[3] > clip[1] }); }
-                    let glyphs: Vec<(Instance, u32)> = posed.iter().map(|g| (g.inst, g.glyph)).collect();
+                    out.clear();
+                    out.extend(posed.iter().map(|g| (g.inst, g.glyph)));
+                    let glyphs = &*out;
                     // A selection (the field's, while it has focus, or the read-only one) is drawn by
                     // nearness: each selected glyph again, under itself, with its outline moved out, so
                     // neighbouring glyphs' halos run together and follow the letters, not a box.
                     // The halo is opaque, the accent mixed into the ground (`Look::select`), so halos that
                     // overlap make no darker band; it is there at once (born long ago) and goes at once.
                     let range = select.filter(|_| focused).or_else(|| ro.get(&i).copied());
-                    let mut chosen = vec![false; glyphs.len()];
+                    chosen.clear();
+                    chosen.resize(glyphs.len(), false);
                     if let Some((a, b)) = range {
                         let boxes = self.text.boxes(para, n.origin(), a, b);
                         for (k, (g, gid)) in glyphs.iter().enumerate() {
@@ -4586,6 +4597,7 @@ impl<S, M: Clone> Ui<S, M> {
         self.scene.plate_now = self.pclock;
         self.scene.plate_ageing = self.plates_ageing();
         self.scene.own = own_cols;
+        self.text_scratch = tx;
         // Text whose string changed: the changed glyphs recompose, the others keep their birth and slide.
         if !jobs.is_empty() || !self.recs.is_empty() {
             self.recompose_jobs(jobs, &mut births);
@@ -6500,12 +6512,17 @@ impl<S, M: Clone> Ui<S, M> {
         let now = self.clock;
         let spec = self.timing.recompose;
         let done: Vec<(usize, String)> = jobs.iter().map(|j| (j.node, self.nodes[j.node].key.clone())).collect();
+        // Each recording text's glyphs as they were put in the scene (clip, looseness, response, birth), by
+        // identity: one look over the scene for all of them.
+        let mut recording = vec![false; self.nodes.len()];
+        for j in &jobs { recording[j.node] = true; }
+        let index: HashMap<u64, usize> = (0..self.scene.instances.len()).filter(|&k| self.owners.get(k).is_some_and(|o| recording.get(o.0).copied().unwrap_or(false))).map(|k| (self.owners[k].1, k)).collect();
         for job in jobs {
-            let key = self.nodes[job.node].key.clone();
             let mut new = job.rec;
-            // The glyphs as they were put in the scene (clip, looseness, response, birth).
-            let index: HashMap<u64, usize> = (0..self.scene.instances.len()).filter(|&k| self.owners.get(k).is_some_and(|o| o.0 == job.node)).map(|k| (self.owners[k].1, k)).collect();
             for (id, inst) in new.glyphs.iter_mut() { if let Some(&k) = index.get(id) { *inst = self.scene.instances[k]; } }
+            // The same text (a paint without a new view: a scroll step): only where it is and its glyphs are new.
+            if let Some(o) = self.recs.get_mut(&self.nodes[job.node].key) && o.s == new.s { *o = TextRec { changed: o.changed, ..new }; continue; }
+            let key = self.nodes[job.node].key.clone();
             let old = self.recs.remove(&key);
             let changed = match &old { None => f32::NEG_INFINITY, Some(o) if o.s == new.s => o.changed, Some(_) => now };
             self.recs.insert(key.clone(), TextRec { glyphs: new.glyphs.clone(), changed, ..new.clone_head() });
