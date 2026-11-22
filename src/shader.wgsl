@@ -45,7 +45,7 @@ struct U {
   scrollo: array<vec4f, 8>, // their content offsets (x, y, whole device px), trace strength, the way the content moves (±1 down/up, ±2 right/left)
   scrp: vec4f,     // the trace's lengths (device px): trail, misregistration, glitch slip, glitch band
   scrq: vec4f,     // the least time between two glitch slips (s); the beat clock off the grid (condensing); how much ink plain keeps at the legibility cap (Theme::press_keep); w: with less motion, how long new things fade in (s; 0 otherwise)
-  post: array<vec4f, 7>, // the finishing pass (post.rs Post::pack): dither kind, levels, palette size, on; bloom strength, threshold, radius, dither strength; chroma offset, scanline strength, period, grain; vignette strength, radius, curvature, grain cell; invert, binary, the grain's region on, the bloom's; the grain's region; the bloom's
+  post: array<vec4f, 8>, // the finishing pass (post.rs Post::pack): dither kind, levels, palette size, on; bloom strength, threshold, radius, dither strength; chroma offset, scanline strength, period, grain; vignette strength, radius, curvature, grain cell; invert, binary, the grain's region on, the bloom's; the grain's region; the bloom's; text kept clear, its scanlines
   pal: array<vec4f, 16>, // the palette, sRGB 0–1
   fmap: vec4f,     // the field map (DESIGN.md §1.29): cell (device px), drift (device px), nodes across, down (0: all zero, not read)
   sbox: vec4f,     // a commit's scope (El::commit_scope): x0, y0, x1, y1 device px; outside it the old frame stays (x1 <= x0: none)
@@ -692,6 +692,14 @@ fn near_in(i: VOut, top: bool) -> vec4f {
 // Text to read over others' ink (scene.rs Scene::holds): 1 on its own ink and within paint.x device px of
 // its true outline, falling smoothly to 0 at paint.y; max-blended into the hold image.
 @vertex fn vs_hold(i: VIn) -> VOut { return vs_pad(i, i.paint.y); }
+/// The text mask (`PostSpec::clear_text`): 1 on a glyph of text to read and within 2 device px of its
+/// outline, falling to 0 a pixel further (a glyph's rect already reaches SPREAD past its ink).
+@vertex fn vs_tmask(i: VIn) -> VOut { return vs_pad(i, 0.0); }
+@fragment fn fs_tmask(iv: VOut) -> @location(0) vec4f {
+  let s = inst(exact_i(iv));
+  let d = max(s.w, 0.0);
+  return vec4f(clamp((4.0 - d) * 0.5, 0.0, 1.0), 0.0, 0.0, 0.0);
+}
 @fragment fn fs_hold(iv: VOut) -> @location(0) vec4f {
   // A control's island (paint.x −3, `Ui::holds`): its box (rect, radius in uv.x) within the control's
   // outline at rest (clip, radius in look.x); hard, a one-pixel edge, and held all through (r and g).
@@ -1726,6 +1734,8 @@ fn dither_t(kind: f32, p: vec2f) -> f32 {
   if (k == 5) { return 0.125 + 0.75 * bayer_t(p, 4u, 2u); }
   return 0.5;
 }
+/// The text mask at `p` in the finishing pass (`fs_tmask`, bound in the hold slot).
+fn tmask_at(p: vec2f) -> f32 { return textureLoad(hold, vec2i(clamp(floor(p), vec2f(0.0), u.res.xy - 1.0)), 0).r; }
 @fragment fn fs_post(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let res = u.res.xy;
   let ctr = res * 0.5;
@@ -1739,11 +1749,22 @@ fn dither_t(kind: f32, p: vec2f) -> f32 {
   }
   var c: vec3f;
   let off = u.post[2].x;
+  var sl = u.post[2].y;
   if (off != 0.0) {
     let dir = (p - ctr) / max(length(p - ctr), 1.0);
-    c = vec3f(post_bloom(p + dir * off).r, post_bloom(p).g, post_bloom(p - dir * off).b);
+    // Text to read kept clear (`PostSpec::clear_text`; the text mask is in the hold slot here): a channel
+    // is not offset where the pixel or the point it would be read from is on its ink or within 2 px of it,
+    // so the text has no fringe and leaves none beside it.
+    var r = off; var b = off;
+    if (u.post[7].x > 0.5) {
+      let m = tmask_at(p);
+      r *= 1.0 - max(m, tmask_at(p + dir * off));
+      b *= 1.0 - max(m, tmask_at(p - dir * off));
+    }
+    c = vec3f(post_bloom(p + dir * r).r, post_bloom(p).g, post_bloom(p - dir * b).b);
   } else { c = post_bloom(p); }
-  let sl = u.post[2].y;
+  // And its scanlines calmer.
+  if (u.post[7].x > 0.5) { let m = tmask_at(p); if (m > 0.0) { sl = mix(sl, min(sl, u.post[7].y), m); } }
   if (sl > 0.0) { c *= 1.0 - sl * (0.5 + 0.5 * cos(6.2831853 * (floor(p.y) + 0.5) / u.post[2].z)); }
   let ga = u.post[2].w;
   // Within the region the runtime set (`El::grain`), when it set one.

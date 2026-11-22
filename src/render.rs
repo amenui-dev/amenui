@@ -52,7 +52,7 @@ struct Uniforms {
     scrp: [f32; 4],
     scrq: [f32; 4],
     /// The finishing pass (`post::Post::pack`) and its palette.
-    post: [[f32; 4]; 7],
+    post: [[f32; 4]; 8],
     pal: [[f32; 4]; crate::post::PALETTE_MAX],
     /// The field map: cell and drift (device px), nodes across and down (0: all zero, not read).
     fmap: [f32; 4],
@@ -90,6 +90,8 @@ const NEAR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// r, g: what text to read holds (`fs_hold`); b: where a picture of the page is, by its flag in the
 /// near image; a: where the modal layer has a shape or a picture of its own.
 const HOLD: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// r: text to read and 2 px round it, where the finishing pass keeps it clear (`PostSpec::clear_text`).
+const TMASK: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 /// When a plate's pixel was drawn last, in `PLATE_TICK`s of the plate clock, as 24 bits in RGB (A: drawn).
 const PLATE_AGE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// The plate clock's step, s (24 bits of it last 38 hours).
@@ -227,6 +229,13 @@ pub struct Renderer {
     hold_pipe: wgpu::RenderPipeline,
     holds: wgpu::Buffer,
     hold_cap: usize,
+    /// The text mask (`PostSpec::clear_text`): its target, pipeline, instances, their count; drawn only
+    /// when the look keeps text clear.
+    tmask: wgpu::TextureView,
+    tmask_pipe: wgpu::RenderPipeline,
+    tmask_buf: wgpu::Buffer,
+    tmask_cap: usize,
+    tmask_n: u32,
     hold_n: u32,
     /// The field map's texture (`fieldmap::MAX_NODES` square; the map's nodes in its top left), the
     /// bytes last uploaded, and what the uniforms say about it this frame.
@@ -533,6 +542,7 @@ impl Renderer {
             pipe("vs_inst", "fs_ink_top", INK, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), true),
         ];
         let hold_pipe = pipe("vs_hold", "fs_hold", HOLD, Some(wgpu::BlendState { color: maxb, alpha: maxb }), true);
+        let tmask_pipe = pipe("vs_tmask", "fs_tmask", TMASK, Some(wgpu::BlendState { color: maxb, alpha: maxb }), true);
         let tiles = Self::tiles(&device);
         let mesh = Self::mesh_gpu(&device);
         let zero = [pipe("vs_full", "fs_zero", INK, None, false), pipe("vs_full", "fs_zero", out_format, None, false)];
@@ -577,12 +587,13 @@ impl Renderer {
         let fmap_view = fmap.create_view(&Default::default());
         let material = Self::bind(&device, &layout, &ubuf, &sampler, [&blank, &blank, &marks_view, &palette_view, &chars_view, &blank, &blank, &fmap_view, &blank]);
         let holds = Self::instance_buffer(&device, 64);
+        let tmask_buf = Self::instance_buffer(&device, 64);
         let annots = Self::instance_buffer(&device, 256);
         let (blank_view, blank_group) = (blank.clone(), material.clone());
         let prime = (Self::target(&device, 1, 1, out_format), material.clone());
         let mut r = Self {
             device, queue, out_format, layout, ubuf, sampler, atlas, atlas_view, marks, marks_view, palette_view, chars, chars_view,
-            before: blank.clone(), blank: blank.clone(), hold: blank.clone(), hold_pipe, holds, hold_cap: 64, hold_n: 0, fmap, fmap_view: fmap_view.clone(), fmap_seen: None, fmap_u: [0.0; 4], split_seen: 0, split: [0.0; 4], last_look: None, marks_ready: false, hide_glyphs: false, atlas_new: true, path: Default::default(), plates_laid: std::cell::Cell::new(0),
+            before: blank.clone(), blank: blank.clone(), hold: blank.clone(), hold_pipe, holds, hold_cap: 64, hold_n: 0, tmask: blank.clone(), tmask_pipe, tmask_buf, tmask_cap: 64, tmask_n: 0, fmap, fmap_view: fmap_view.clone(), fmap_seen: None, fmap_u: [0.0; 4], split_seen: 0, split: [0.0; 4], last_look: None, marks_ready: false, hide_glyphs: false, atlas_new: true, path: Default::default(), plates_laid: std::cell::Cell::new(0),
             pictures: HashMap::default(), picture_views: HashMap::default(), fresh_pics: vec![], hold_group: None, instances, capacity, pipes, annots, annot_capacity: 256, up_pipe: None, check_pipes: None, trace_pipe: None, specialise: Some(SPECIALISE_AFTER), spec_force: None, spec: Default::default(), drawn: 0, prime, spec_for: None, run_mats: (0, 0), spec_used: None, shader, pl,
             ink: blank.clone(), lo: blank.clone(), lo_key: (0, 0, 0), material_up: material.clone(), auto: Default::default(), always_lo: false, stage_u: Box::new(([[0.0; 4]; STAGES], [[0.0; 4]; STAGES], [0.0; 4])), stage_q: 1.0, lop: [0.0, 0.0, -1.0, -1.0], anchor: None, soft_q: 1.0, govern: true, no_map: false,
             near: blank, material_first: material.clone(), material, size: (0, 0), tiles, mesh, sim_rows: 0,
@@ -860,6 +871,7 @@ impl Renderer {
         self.plates = Default::default();
         self.near = Self::target_with(&self.device, w, h, NEAR, moved);
         self.hold = Self::target(&self.device, w, h, HOLD);
+        self.tmask = Self::target(&self.device, w, h, TMASK);
         // Stage 1 reads the hold image (a shape scribblr fades keeps its fill where text holds it).
         for (id, view) in &self.picture_views {
             let g = Self::bind(&self.device, &self.layout, &self.ubuf, &self.sampler, [&self.atlas_view, view, &self.marks_view, &self.palette_view, &self.chars_view, &self.blank, &self.blank, &self.fmap_view, &self.hold]);
@@ -876,7 +888,7 @@ impl Renderer {
         });
         self.frame_view = frame.create_view(&Default::default());
         self.alt = [Self::target_with(&self.device, w, h, INK, moved), Self::target_with(&self.device, w, h, NEAR, moved), Self::target_with(&self.device, w, h, self.out_format, moved)];
-        self.blit_group = Self::bind(&self.device, &self.layout, &self.ubuf, &self.sampler, [&self.frame_view, &self.blank, &self.marks_view, &self.palette_view, &self.chars_view, &self.blank, &self.blank, &self.fmap_view, &self.blank]);
+        self.blit_group = Self::bind(&self.device, &self.layout, &self.ubuf, &self.sampler, [&self.frame_view, &self.blank, &self.marks_view, &self.palette_view, &self.chars_view, &self.blank, &self.blank, &self.fmap_view, &self.tmask]);
         self.prev = None;
         // The old frame is gone with the old size.
         self.split = [0.0; 4];
@@ -1665,7 +1677,30 @@ impl Renderer {
         self.material = b([&ink, &near, &self.marks_view, &self.palette_view, &self.chars_view, &self.before, &self.blank, &self.fmap_view, &self.hold]);
         self.material_first = b([&ink, &near, &self.marks_view, &self.palette_view, &self.chars_view, &self.blank, &self.blank, &self.fmap_view, &self.hold]);
         self.material_up = b([&ink, &near, &self.marks_view, &self.palette_view, &self.chars_view, &self.before, &self.lo, &self.fmap_view, &self.hold]);
-        self.blit_group = b([&fr, &self.blank, &self.marks_view, &self.palette_view, &self.chars_view, &self.blank, &self.blank, &self.fmap_view, &self.blank]);
+        self.blit_group = b([&fr, &self.blank, &self.marks_view, &self.palette_view, &self.chars_view, &self.blank, &self.blank, &self.fmap_view, &self.tmask]);
+    }
+    /// The text mask for this frame, when the finishing pass keeps text clear: its glyphs of text to read
+    /// (`Scene::legible`) as they are now.
+    fn tmask_upload(&mut self, scene: &Scene, on: bool) {
+        self.tmask_n = 0;
+        if !on { return; }
+        let v: Vec<Instance> = scene.legible.iter().filter_map(|&k| scene.instances.get(k as usize).copied()).collect();
+        if v.len() > self.tmask_cap {
+            self.tmask_cap = v.len().next_power_of_two();
+            self.tmask_buf = Self::instance_buffer(&self.device, self.tmask_cap);
+        }
+        if !v.is_empty() { self.queue.write_buffer(&self.tmask_buf, 0, bytemuck::cast_slice(&v)); }
+        self.tmask_n = v.len() as u32;
+    }
+    fn tmask_pass(&self, enc: &mut wgpu::CommandEncoder, on: bool) {
+        if !on { return; }
+        let mut pass = clear(enc, &self.tmask, wgpu::Color::TRANSPARENT);
+        if self.tmask_n == 0 { return; }
+        let Some(group) = &self.hold_group else { return };
+        pass.set_pipeline(&self.tmask_pipe);
+        pass.set_bind_group(0, group, &[]);
+        pass.set_vertex_buffer(0, self.tmask_buf.slice(..));
+        pass.draw(0..4, 0..self.tmask_n);
     }
     fn hold_pass(&self, enc: &mut wgpu::CommandEncoder) {
         let mut pass = clear(enc, &self.hold, wgpu::Color::TRANSPARENT);
@@ -1993,6 +2028,8 @@ impl Renderer {
         for p in &scene.plates { self.plate_fade[p.slot as usize] = [(p.fade_s / PLATE_TICK).round(), 1.0, 0.0, 0.0]; }
         self.uniforms(f.field, f.look, f.scale, f.t, f.mt, f.split, lo.unwrap_or([1.0, 1.0, self.size.0 as f32, self.size.1 as f32]));
         self.upload(scene);
+        let clear_text = f.look.post.clear_text && f.look.post.active();
+        self.tmask_upload(scene, clear_text);
         self.tiles.grid_now = None;
         let tiles = match (f.tiles, f.grid) {
             (Some([clock, curl, ease, pic, len]), Some(g)) => {
@@ -2081,6 +2118,7 @@ impl Renderer {
         self.plates_ink(&mut enc, scene, boxes.as_ref().map(|b| b.0.as_slice()));
         self.plates_laid.set(0);
         self.hold_pass(&mut enc);
+        self.tmask_pass(&mut enc, clear_text && with_before);
         let px = |v: &[[u32; 4]]| v.iter().map(|b| (b[2] * b[3]) as u64).sum::<u64>();
         let whole = (w * h) as u64;
         if with_before {

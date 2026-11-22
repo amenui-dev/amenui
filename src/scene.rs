@@ -108,6 +108,9 @@ pub struct Scene {
     /// outline it holds the looseness beneath to the legibility cap, `r0` fully and fading out by `r1`
     /// (device px; DESIGN.md §1.15).
     pub holds: Vec<(u32, [f32; 2])>,
+    /// The page's glyphs of text to read, by instance index: where the finishing pass keeps text clear
+    /// (`PostSpec::clear_text`).
+    pub legible: Vec<u32>,
     /// The islands of filled controls whose own fill is loosened (DESIGN.md §1.15): each a box held at
     /// rest, `rect` and its radius in `uv[0]`, within the control's outline at rest (`clip`, its radius in
     /// `look[0]`); drawn into the hold image as they are (`paint[0]` −3).
@@ -153,7 +156,7 @@ impl Scene {
     /// plate's start and end (`(at, 1 + 2 slot)`, `(at, 2 + 2 slot)`). What is drawn differs where an
     /// instance crosses one, so the dirty region matches instances only between the same cuts.
     pub fn cuts(&self) -> Vec<(u32, u32)> { cuts(self.layer, self.plates.iter().map(|p| (p.slot, p.start, p.end))) }
-    pub fn clear(&mut self) { self.instances.clear(); self.batches.clear(); self.layer = None; self.annot.clear(); self.meshes.clear(); self.groups.clear(); self.holds.clear(); self.islands.clear(); self.plates.clear(); self.own.clear(); self.stages.clear(); }
+    pub fn clear(&mut self) { self.instances.clear(); self.batches.clear(); self.layer = None; self.annot.clear(); self.meshes.clear(); self.groups.clear(); self.holds.clear(); self.legible.clear(); self.islands.clear(); self.plates.clear(); self.own.clear(); self.stages.clear(); }
     /// Everything pushed from now on is in the modal layer.
     pub fn begin_layer(&mut self) { self.layer = Some(self.instances.len() as u32); }
     pub fn push(&mut self, i: Instance) {
@@ -175,6 +178,7 @@ impl Scene {
         if let Some(b) = self.batches.last_mut() { b.end = b.end.min(n as u32); }
         self.groups.retain(|g| (g.start as usize) < n);
         self.holds.retain(|h| (h.0 as usize) < n);
+        self.legible.retain(|&k| (k as usize) < n);
         // An empty plate still lays on what it keeps.
         self.plates.retain(|p| (p.start as usize) <= n);
         for p in &mut self.plates { p.end = p.end.min(n as u32); }

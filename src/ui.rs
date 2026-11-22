@@ -4640,6 +4640,9 @@ impl<S, M: Clone> Ui<S, M> {
         });
         if let Some((_, reset, _)) = self.caret { self.caret_on = ((now - reset).max(0.0) / BLINK).floor() as i64 % 2 == 0; }
         self.scene.holds = self.holds(true);
+        self.scene.legible = self.scene.instances.iter().enumerate()
+            .filter(|(k, i)| i.paint[3] == GLYPH && i.paint[2] > 0.0 && self.owners.get(*k).is_some_and(|o| self.nodes.get(o.0).is_some_and(|n| n.legible && !n.hidden)))
+            .map(|(k, _)| k as u32).collect();
         self.scene.islands = self.islands(true);
         let bridges = self.bridges(&self.scene.holds);
         self.scene.islands.extend(bridges);

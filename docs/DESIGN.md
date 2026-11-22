@@ -2394,6 +2394,22 @@ with `binary` there are still only two colours. Both are switches, off by defaul
 bloom; Glitch uses chromatic offset 1.5, scanlines 0.22, grain, vignette and curvature 0.03; Lo-Fi Print uses
 grain and vignette; the Loose Thread style page has black-and-white-only and invert switches (§4.4).
 
+**Text to read kept clear** (`PostSpec::clear_text`, off by default; only Glitch turns it on): on the ink of
+text to read and 2 device px round it, the chroma offset is 0 and the scanlines are at most 0.08 (the preset's
+0.22 elsewhere), so the strokes the eye reads are not split into fringes or darkened. Pictures, shapes, the
+ground and text not to read (`legible(false)`) keep the whole pass; curvature, vignette and grain apply to text as
+to the rest. The pass learns where the text is from a mask drawn before it (R8, the size of the frame): each
+glyph of text to read (`Scene::legible`, filled where the frame's holds are) is drawn into it by its signed
+distance, full within 2 px of the ink and falling linearly to nothing at 4 px, so the fringe starts softly at the
+edge and does not cut off. A channel is not offset where the pixel or the point it would be read from is under
+the mask, so the text has no fringe and leaves none beside it. Glitch's large headings lose their fringe too: they
+are text to read. Without `clear_text`, or with neither chroma nor scanlines on, nothing is drawn into the mask
+and the frame is as before.
+
+The audit reads a bent frame (curvature) where the bend drew each pixel back to where layout put it
+(`audit::unbend`, nearest), so text near the corners is measured against its own ink boxes and not the ground
+the bend moved in under them; the softening of the bend stays in what is measured.
+
 **Acceptance**: unit tests in `post.rs` (Bayer thresholds are a permutation, 2×2 is the classic 0 2 / 3 1,
 Atkinson-style thresholds lie in 1/8–7/8, palettes, JSON round trips, all off by default); `preset.rs` (recipes
 round-trip `post.dithr.levels`; old presets without the field read as all off); `check` item 17 (formerly item
@@ -3155,7 +3171,10 @@ rest `Eroded` P1; a calm page has no findings;
 the seventeen recipes in every material, dark and light, have no P0 or P1); `tests/preset_rules.rs` (each rule on a
 page broken for it reports one P1 with its measure and limit, and nothing without the rule; the floor and a rule
 on the same text report once; a looser preset is refused and an older one reads with no rules; the seventeen
-recipes in each preset have no P0 or P1, Glitch left out, see §9); `render --page recipe-form --audit
+recipes in each preset have no P0 or P1); `tests/clear_text.rs` (under Glitch, inside the ink boxes of text to
+read red and blue are those of the frame with no chroma offset within 1/255, at 1x and 2x, compared flat; text not
+to read keeps its fringe; a page with no text is byte-identical with it on or off; only Glitch has it); a unit test
+that a bent frame unbent has its marks back where they were laid out; `render --page recipe-form --audit
 --strict` exits 0.
 
 A component's examples are a page too: `render --page component-<name>` lays out `examples/components/<name>.rs`
@@ -4578,8 +4597,9 @@ Text on a form, the warm-up and the audit (§1.23, §1.26, §1.31):
   building. A preset is given the same way: an opener wrapped by `drive::in_preset`.
 - Under the Glitch preset, labels in the form, submenu and loading recipes measure under the audit's own floors
   (2.3–4.2:1; a P0 at 2.95:1 in the submenu): its finishing pass (chroma offset, scanlines) splits and darkens the
-  strokes the contrast measure reads. Without the finishing pass they pass. `tests/preset_rules.rs` leaves Glitch
-  out of the recipe check until that is settled. `MeshHit` lost `Eq` and `Hash` with its float fields.
+  strokes the contrast measure reads. `PostSpec::clear_text` keeps text to read clear of them (§1.21), and the
+  audit reads a bent frame where the bend drew it: the rest was the curvature moving text 3–10 px off its ink boxes
+  near the corners. `MeshHit` lost `Eq` and `Hash` with its float fields.
 - The contrast measure is the strongest ink pixel of a line, the colour the text is drawn in; percentiles of the ink
   read antialiased edges at small sizes as low contrast.
 

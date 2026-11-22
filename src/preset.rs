@@ -456,7 +456,7 @@ fn post_of(hash: &str) -> crate::post::PostSpec {
     use crate::post::*;
     match hash {
         "dotmatrix" => PostSpec { dithr: Dithr { kind: DithrKind::Bayer4, levels: 4, strength: 0.8 }, palette: Palette { kind: PaletteKind::Amber, colors: vec![] }, bloom: Bloom { strength: 0.35, threshold: 0.6, radius: 6.0 }, ..PostSpec::default() },
-        "glitch" => PostSpec { chroma: Chroma { offset: 1.5 }, scanlines: Scanlines { strength: 0.22, period: 3.0 }, grain: Grain { amount: 0.05, size: 1.0 }, vignette: Vignette { strength: 0.35, radius: 0.6 }, curvature: Curvature { amount: 0.03 }, ..PostSpec::default() },
+        "glitch" => PostSpec { chroma: Chroma { offset: 1.5 }, scanlines: Scanlines { strength: 0.22, period: 3.0 }, grain: Grain { amount: 0.05, size: 1.0 }, vignette: Vignette { strength: 0.35, radius: 0.6 }, curvature: Curvature { amount: 0.03 }, clear_text: true, ..PostSpec::default() },
         "lofi-print" => PostSpec { grain: Grain { amount: 0.06, size: 1.5 }, vignette: Vignette { strength: 0.18, radius: 0.7 }, ..PostSpec::default() },
         _ => PostSpec::default(),
     }

@@ -293,6 +293,29 @@ fn line_contrast<S, M: Clone>(ui: &Ui<S, M>, px: &[u8], ground: &[u8]) -> Vec<(u
     }
     out
 }
+/// A frame drawn with the finishing pass's curvature (`Curvature::amount`, `bend`) read back where layout
+/// put things: each pixel is the drawn pixel the bend carried it to (nearest), so text is measured
+/// against its own ink boxes, softened by the bend as drawn. The bend is `fs_post`'s: a pixel at `q`
+/// shows what was at `ctr + d (1 + bend |d|²) half`, `d = (q − ctr) / half`.
+pub fn unbend(px: &[u8], (w, h): (u32, u32), bend: f32) -> Vec<u8> {
+    if bend == 0.0 || px.len() < (w * h * 4) as usize { return px.to_vec(); }
+    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
+    let half = (cx * cx + cy * cy).sqrt();
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = ((x as f32 + 0.5 - cx) / half, (y as f32 + 0.5 - cy) / half);
+            // The drawn point whose bend lands here: d_q (1 + bend |d_q|²) = d, by a few fixed-point steps.
+            let (mut qx, mut qy) = (dx, dy);
+            for _ in 0..6 { let k = 1.0 + bend * (qx * qx + qy * qy); (qx, qy) = (dx / k, dy / k); }
+            let (sx, sy) = ((cx + qx * half).floor(), (cy + qy * half).floor());
+            if sx < 0.0 || sy < 0.0 || sx >= w as f32 || sy >= h as f32 { continue; }
+            let (o, i) = (((y * w + x) * 4) as usize, ((sy as u32 * w + sx as u32) * 4) as usize);
+            out[o..o + 4].copy_from_slice(&px[i..i + 4]);
+        }
+    }
+    out
+}
 /// A lone mark (›, −, ×: no letter or digit in it) is a symbol, not text to read: it needs the 3:1 of a
 /// graphic (WCAG 1.4.11), and a preset's rules are not about it.
 fn is_mark<S, M: Clone>(ui: &Ui<S, M>, i: usize) -> bool { !ui.nodes()[i].text().unwrap_or_default().chars().any(char::is_alphanumeric) }
@@ -602,5 +625,36 @@ fn measure<S, M: Clone>(ui: &mut Ui<S, M>, theme: &crate::style::Theme, by: &str
             out.push(Finding { level: Level::P1, key: ui.nodes()[i].key.clone(), kind: Kind::Measure, measured: n as f32, limit: max,
                 fix: format!("line {} runs {n} characters ({by} allows {max}): make the column about {:.0}% narrower, or set the text larger", k + 1, (1.0 - max / n as f32) * 100.0) });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A frame bent as `fs_post` bends it (nearest), read back by `unbend`, has its marks where layout
+    /// put them, near the corners too.
+    #[test]
+    fn unbend_puts_a_bent_mark_back_where_it_was_laid_out() {
+        let (w, h, bend) = (240u32, 160u32, 0.03f32);
+        let mut flat = vec![0u8; (w * h * 4) as usize];
+        let marks = [(14u32, 10u32), (220, 140), (118, 78)];
+        for &(mx, my) in &marks { for y in my..my + 4 { for x in mx..mx + 4 { let o = ((y * w + x) * 4) as usize; flat[o..o + 4].copy_from_slice(&[255; 4]); } } }
+        let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
+        let half = (cx * cx + cy * cy).sqrt();
+        let mut bent = vec![0u8; flat.len()];
+        for y in 0..h { for x in 0..w {
+            let (dx, dy) = ((x as f32 + 0.5 - cx) / half, (y as f32 + 0.5 - cy) / half);
+            let k = 1.0 + bend * (dx * dx + dy * dy);
+            let (sx, sy) = ((cx + dx * k * half).floor(), (cy + dy * k * half).floor());
+            if sx < 0.0 || sy < 0.0 || sx >= w as f32 || sy >= h as f32 { continue; }
+            let (o, i) = (((y * w + x) * 4) as usize, ((sy as u32 * w + sx as u32) * 4) as usize);
+            bent[o..o + 4].copy_from_slice(&flat[i..i + 4]);
+        } }
+        let lit = |px: &[u8], (mx, my): (u32, u32)| (my..my + 4).flat_map(|y| (mx..mx + 4).map(move |x| (y, x))).filter(|&(y, x)| px[((y * w + x) * 4) as usize] == 255).count();
+        let back = super::unbend(&bent, (w, h), bend);
+        for &m in &marks {
+            assert!(lit(&bent, m) < 16 || m == (118, 78), "the bend moves the mark at {m:?}");
+            assert!(lit(&back, m) >= 14, "the mark at {m:?} is back: {} of 16", lit(&back, m));
+        }
+        assert_eq!(super::unbend(&flat, (w, h), 0.0), flat, "no bend, the same frame");
     }
 }

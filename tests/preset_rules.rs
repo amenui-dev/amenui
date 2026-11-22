@@ -113,9 +113,6 @@ fn every_recipe_in_each_preset_has_no_p0_or_p1() {
     let mut bad = vec![];
     for page in amenui::recipes::NAMES {
         for p in presets() {
-            // Glitch's finishing pass (chroma, scanlines) brings its labels under the audit's own floors in
-            // form, submenu and loading; the ruling on that is pending.
-            if p.hash == "glitch" { continue; }
             let spec = RenderSpec { page: format!("recipe-{page}"), w: 800, h: 600, scale: 1.0, material: None, theme: None, at_ms: 1500.0, events: vec![], locale: None };
             let (_, f) = audit_with(&spec, fonts(), Some(&mut o), &*in_preset(&p, &open_in)).expect("audit");
             bad.extend(f.into_iter().filter(|f| matches!(f.level, Level::P0 | Level::P1)).map(|f| format!("{page} {}: {f}  [{:.2} / {:.2}]", p.hash, f.measured, f.limit)));
