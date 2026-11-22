@@ -20,6 +20,10 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
   off by default): on its ink and 2 px round it the offset is 0 and the scanlines 0.08. Pictures, shapes, the ground
   and `legible(false)` text keep the whole pass. The audit reads a frame bent by curvature where the bend drew it
   (`audit::unbend`). Breaking: `PostSpec` and `Post` have `clear_text`, `Scene` has `legible`.
+- At rest a card stack's flat cards are on whole pixels (`Stack::fit`, `Stack::scene_in`): each side's outline is
+  one pixel at its grey, where the top and right ones had been two at half strength. A 3D element's edge on a pixel
+  boundary reads as exactly there (the resolve's zero on a whole step, and distances within a step of a half pixel
+  taken as that), so it covers the pixel inside fully and the one outside not at all.
 
 - The pointer leaving an element whose messages are its own (`El::local_messages`) restages it as a move over it does;
   the leave had viewed and laid out the whole page. On the Lab's loupe this takes a 10 ms frame each time the pointer

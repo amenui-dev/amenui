@@ -50,7 +50,7 @@ fn the_top_card_is_outlined_in_ink_and_the_ones_under_it_in_hairline() {
         eprintln!("{}: hairline under {bh} hairline px; ink under {ui} ink px", th.name);
         assert!(bh > 150, "{}: the cards under the top one in the hairline grey: {bh} px", th.name);
         assert!(ui > 100, "{}: asked for ink, the cards under the top one are the ink: {ui} px", th.name);
-        // The top card (square to the pixels, its outline on no whole pixel) alone changes with its own
+        // The top card (square to the pixels) alone changes with its own
         // grey: in ink it is nearer the ink than in hairline wherever they differ.
         let top_h = shot(&mut o, fanned(vec![Paint::HAIRLINE, Paint::HAIRLINE]));
         let ink = th.ink.map(|v| (v * 255.0).round() as i32);
@@ -198,6 +198,58 @@ fn marked_cards_are_plain_at_rest_and_marks_only_while_they_fan() {
                 let floor = if mat == Material::Halftonr { 0.15 } else { 0.25 };
                 assert!(least >= floor, "{name}: {:.1}% of the cards' inside differs from plain at the least", least * 100.0);
                 assert!(marked >= 10 && stopped.is_some(), "{name}: {marked} frames of marks, the springs stopped at {stopped:?}");
+            }
+        }
+    }
+}
+
+/// At rest the top card's outline is on whole pixels, in a box the size the site's stack is: one pixel at
+/// the ink on every side (within 2/255), and no pixel part way to it beside it, at 1x and 2x, dark and light.
+#[test]
+fn at_rest_the_top_cards_outline_is_one_whole_pixel_on_every_side() {
+    const BW: f32 = 520.0;
+    const BH: f32 = 340.0;
+    #[derive(Clone)]
+    struct R { light: bool }
+    fn rest(s: &R) -> El<()> { col().key("page").pad(20.0, 20.0).child(card_stack("cs", &Stack::default(), BW, BH, |_| ())).key(if s.light { "light" } else { "dark" }) }
+    let deck = Stack::default();
+    let ((w, h), (px, py)) = deck.fit(BW, BH);
+    let k = BH / 1.25;
+    // The card's edges in logical px of the page: the box is at (20, 20).
+    let (l, r) = (20.0 + BW * 0.5 + px * k, 20.0 + BW * 0.5 + (px + w) * k);
+    let (b, t) = (20.0 + BH * 0.5 - py * k, 20.0 + BH * 0.5 - (py + h) * k);
+    for v in [l, r, b, t] { assert!((v - v.round()).abs() < 1e-3, "the edges are whole: {l} {r} {t} {b}"); }
+    for scale in [1.0f32, 2.0] {
+        let (fw, fh) = (((BW + 40.0) * scale) as u32, ((BH + 40.0) * scale) as u32);
+        let mut o = Offscreen::new(fw, fh);
+        for light in [false, true] {
+            let th = if light { LIGHT } else { DARK };
+            let mut u = Ui::new(R { light }, rest, |_, _| {}, fonts(), fw, fh, scale)
+                .on_look(|s| Look { material: Material::Plain, theme: if s.light { LIGHT } else { DARK }, ..Look::default() });
+            u.tick(2.0);
+            u.settle();
+            let lk = u.look();
+            o.r.partial = false;
+            let f = o.render(&mut u, &lk);
+            let ink = th.ink.map(|v| (v * 255.0).round() as i32);
+            let raised = th.greys.raised.map(|v| (v * 255.0).round() as i32);
+            let px_at = |x: i32, y: i32| { let i = ((y as u32 * fw + x as u32) * 4) as usize; [f[i] as i32, f[i + 1] as i32, f[i + 2] as i32] };
+            let off = |p: [i32; 3]| (0..3).map(|c| (p[c] - ink[c]).abs()).max().unwrap_or(0);
+            let span = (0..3).map(|c| (raised[c] - ink[c]).abs()).max().unwrap_or(1).max(1);
+            // Across each edge, 4 device px either way, along a line through the middle of the side.
+            let (mx, my) = (((l + r) * 0.5 * scale) as i32, ((t + b) * 0.5 * scale) as i32);
+            let sides: [(&str, Vec<(i32, i32)>); 4] = [
+                ("left", (-4..4).map(|d| ((l * scale) as i32 + d, my)).collect()),
+                ("right", (-4..4).map(|d| ((r * scale) as i32 + d, my)).collect()),
+                ("top", (-4..4).map(|d| (mx, (t * scale) as i32 + d)).collect()),
+                ("bottom", (-4..4).map(|d| (mx, (b * scale) as i32 + d)).collect()),
+            ];
+            for (side, line) in sides {
+                let offs: Vec<i32> = line.iter().map(|&(x, y)| off(px_at(x, y))).collect();
+                let peak = offs.iter().copied().min().unwrap_or(255);
+                assert!(peak <= 2, "{} {scale}x {side}: the outline peaks {peak}/255 from the ink ({offs:?})", th.name);
+                let part = offs.iter().filter(|&&d| d > 2 && d * 4 < span * 3).count();
+                assert_eq!(part, 0, "{} {scale}x {side}: pixels part way to the ink beside the outline ({offs:?})", th.name);
             }
         }
     }

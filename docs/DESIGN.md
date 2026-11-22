@@ -2075,7 +2075,11 @@ grey from the texel under its centre, found from its whole position in the box, 
 driver: one renderer lost an outline's top row and another its bottom). For a box of whole pixels this is exact
 at every scale, so every driver draws the same pixels, and the element moved by whole pixels draws them again;
 at 2 a pixel covers its own 2 × 2 texels and stands for the lower right one (the nearness is filtered over them)
-(`tests/mesh_texel.rs`).
+(`tests/mesh_texel.rs`). The resolve's nearness is 8 bits over ±SPREAD, so a distance read from it is good to
+about a tenth of a pixel (half a step stored, half filtered); its zero is on a whole step (128 of 255), and a
+distance within one step of half a pixel and a whole number more is taken as that (`mesh_snap`), so an edge on a
+pixel boundary covers the pixel inside it fully, the one outside not at all, and a 1 px outline is exactly its
+grey with nothing beside it. A turned edge's distances are as read.
 
 **The resolve.** Three small full-screen passes: `mask` (covered pixels are silhouette; a covered pixel whose
 right or lower neighbour is a different instance, whose depth jumps more than `edge_depth` (relative depth,
@@ -2522,7 +2526,10 @@ afterwards).
 `widgets::card_stack` (`Stack { count 5, angle0 42, falloff 0.7, delay_ms 28, spring (k 260, c 24), look, card,
 paints, outline, outlines }`). By default every card is raised (`paints [RAISED]`), outlined 1 px (`outline`), the
 top card in the ink and the ones under it in the hairline grey (`outlines [INK, HAIRLINE]`: card n takes entry n,
-the last one repeating; empty, the ink); categories are not told apart by the accents.
+the last one repeating; empty, the ink); categories are not told apart by the accents. Flat cards are fitted to
+their box (`Stack::fit`, which `card_stack` draws with): the corner they turn about and their far edges move to the
+nearest whole pixel (under half a pixel each), so at rest each side's outline is one whole pixel at its grey, not
+two at half strength.
 Hovering or pressing a card (a 3D element's `Pick`) turns the n-th card beneath it (n from 0) to
 `angle0 × falloff^n` degrees, starting after `delay_ms × n` ms, each with its own spring with velocity hand-off
 (§1.8.4), about its own bottom-left corner; the cards above stay. A press keeps it fanned, Esc closes it, and the
@@ -2536,7 +2543,9 @@ tests in `card_stack.rs` (the formula, the order of delays, holding, Esc, the lo
 (the pointer picks the top card, at 40 ms cards 1 and 2 have started and card 3 hasn't, after stopping each card
 equals the formula, no frames at rest, closing on leave); `tests/card_stack.rs` (marked cards' pixels are plain's
 at rest and from 240 ms after the springs stop; from 120 ms after the fan starts a quarter of their inside
-differs, under `halftonr` 15%, whose dots at full ink meet, with some in every window of 3 × 3 cells). Samples `craft <dir> stack`: one row per look.
+differs, under `halftonr` 15%, whose dots at full ink meet, with some in every window of 3 × 3 cells; at rest in a
+520 × 340 box the top card's outline is one pixel at the ink within 2/255 on every side, with no pixel part way to it
+beside it, at 1x and 2x, dark and light). Samples `craft <dir> stack`: one row per look.
 
 ### 1.25 A dot chart
 

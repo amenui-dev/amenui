@@ -399,8 +399,8 @@ fn inst(i: VOut) -> vec4f {
     // (filtered: the target may be smaller than the box). Past the box it falls off by the distance.
     let e = mesh_near(i);
     let over = max(max(-i.local.x, i.local.x - i.size.x), max(-i.local.y, i.local.y - i.size.y));
-    let sil = (e.r - 0.5) * 2.0 * u.fd.z - max(over, 0.0);
-    let face = (e.g - 0.5) * 2.0 * u.fd.z - max(over, 0.0);
+    let sil = mesh_snap((e.r - MESH_ZERO) * 2.0 * u.fd.z) - max(over, 0.0);
+    let face = mesh_snap((e.g - MESH_ZERO) * 2.0 * u.fd.z) - max(over, 0.0);
     let pic = i.extra.x > 0.5 && sil > 0.0;
     return vec4f(clamp(sil + 0.5, 0.0, 1.0), clamp(0.5 + face / (2.0 * u.fd.z), 0.0, 1.0), select(0.0, 1.0, pic), -face);
   }
@@ -487,6 +487,17 @@ fn cells_of(i: VOut) -> vec4f {
   let ac = floor(pk / 65536.0) / 255.0;
   let ink = grey(tone, i.pos.xy) * (1.0 - ac) + hue_col(code_hue(hue)) * ac;
   return vec4f(mix(c, ink, m), cov);
+}
+/// The zero distance of a 3D element's resolve: 128 of 255, a whole step (mesh.wgsl `fs_v`).
+const MESH_ZERO: f32 = 128.0 / 255.0;
+/// A distance read from a 3D element's resolve, to within a step of it (2 SPREAD / 255 px: half a step
+/// as stored, half as filtered) of half a pixel and a whole number more, taken as that: an edge on a
+/// pixel boundary is then half a pixel from the centres either side exactly, so the pixel inside is
+/// covered and the one outside not, and a one-pixel outline is all line and none beyond it. An edge
+/// anywhere else (a turned card) is as read.
+fn mesh_snap(d: f32) -> f32 {
+  let h = round(d - 0.5) + 0.5;
+  return select(d, h, abs(d - h) < 2.0 * u.fd.z / 255.0);
 }
 /// A 3D element's resolved nearness here (tex0 is its resolve for mesh batches).
 fn mesh_near(i: VOut) -> vec4f { return textureSampleLevel(tex0, samp, clamp(i.uv, vec2f(0.0), vec2f(1.0)), 0.0); }

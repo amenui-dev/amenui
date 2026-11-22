@@ -8,9 +8,15 @@
 //   mask:  r = inside the faces (drawn and not on an edge), g = drawn (the silhouette)
 //   h:     for both masks, the horizontal distance (texels) to the nearest texel inside and outside
 //   v:     the exact Euclidean distance (two-pass, Felzenszwalb style brute force over ±R rows), as the
-//          signed nearness stage 1 uses: r = silhouette, g = silhouette and edges; b = the projected
+//          signed nearness stage 1 uses (its zero on a whole step, MESH_ZERO, not at 0.5: a texel
+//          centre a quarter of a pixel either side of an edge then decodes the same distance inside and
+//          out, so an edge on a pixel boundary covers the pixel inside it fully and the one outside not
+//          at all): r = silhouette, g = silhouette and edges; b = the projected
 //          normal's code (1 = facing the viewer, 2..9 = its direction in eighths of a half turn); a =
 //          the outline's tone where drawn (the id image's), 0 elsewhere
+
+/// The resolve's zero distance: 128 of 255, a whole step (shader.wgsl has the same).
+const MESH_ZERO: f32 = 128.0 / 255.0;
 
 struct MU {
   view: mat4x4f,
@@ -160,5 +166,5 @@ fn hdist(q: vec2i) -> vec4f {
     code = select(2.0 + floor(fract(ang / 3.14159265) * 8.0 + 0.0001) % 8.0, 1.0, l < 0.35);
   }
   let tone = select(0.0, textureLoad(tk, p, 0).a, inside(p));
-  return vec4f(clamp(0.5 + dsil * px / (2.0 * s), 0.0, 1.0), clamp(0.5 + dface * px / (2.0 * s), 0.0, 1.0), code / 255.0, tone);
+  return vec4f(clamp(MESH_ZERO + dsil * px / (2.0 * s), 0.0, 1.0), clamp(MESH_ZERO + dface * px / (2.0 * s), 0.0, 1.0), code / 255.0, tone);
 }
