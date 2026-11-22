@@ -1434,6 +1434,13 @@ impl<S, M: Clone> Ui<S, M> {
         }).collect()
     }
     /// The text of each laid-out line of text node `i` (as shown: a clamped text's own), in order.
+    /// Whether text node `i` is set bold: made bolder by half a logical px or more (`El::weight`), or in
+    /// a face of weight 600 or more.
+    pub(crate) fn bold(&self, i: usize) -> bool {
+        let n = &self.nodes[i];
+        let Content::Text { weight, .. } = &n.content else { return false };
+        *weight >= 0.5 || n.para().is_some_and(|p| self.text.weight(p.face) >= 600)
+    }
     pub(crate) fn line_texts(&mut self, i: usize) -> Vec<String> {
         let Some(p) = self.nodes.get(i).and_then(|n| n.para()) else { return vec![] };
         let s = p.s.to_owned();

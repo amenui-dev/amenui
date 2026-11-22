@@ -85,6 +85,11 @@ pub const MIN_TEXT_PX: f32 = 9.0;
 pub const MIN_CONTRAST: f32 = 4.5;
 /// The most of one glyph's ink another may cover in text to read.
 pub const MAX_OVERLAP: f32 = 0.10;
+/// Large text (WCAG's large scale): its font size is this many logical px or more, or `LARGE_BOLD_PX`
+/// when it is bold. It needs 3:1 only.
+pub const LARGE_PX: f32 = 24.0;
+/// Bold text this large or larger (logical px) is large text.
+pub const LARGE_BOLD_PX: f32 = 19.0;
 /// How long a page may go on asking for frames after the last input (s).
 pub const SETTLE_S: f32 = 2.0;
 /// The least share of plain's ink pixels a material draws of text to read at rest.
@@ -357,12 +362,24 @@ pub fn bent_off<S, M: Clone>(ui: &Ui<S, M>, bend: f32) -> Vec<Finding> {
 /// graphic (WCAG 1.4.11), and a preset's rules are not about it.
 fn is_mark<S, M: Clone>(ui: &Ui<S, M>, i: usize) -> bool { !ui.nodes()[i].text().unwrap_or_default().chars().any(char::is_alphanumeric) }
 
+/// Whether text node `i` is large (`LARGE_PX`, or `LARGE_BOLD_PX` bold): by its font size, logical px.
+fn is_large<S, M: Clone>(ui: &Ui<S, M>, i: usize) -> bool {
+    ui.nodes()[i].para().is_some_and(|p| p.size >= LARGE_PX || (p.size >= LARGE_BOLD_PX && ui.bold(i)))
+}
+/// The base rule for a line of text read at `r`:1, as a finding's level and the limit it falls under
+/// (`None`: it passes). A mark needs 3:1 (P1 under it), text to read 4.5:1 (P1) and 3:1 (P0), large text
+/// to read 3:1 (P0), text not to read 3:1 (P3).
+fn base_contrast(legible: bool, mark: bool, large: bool, r: f32) -> Option<(Level, f32)> {
+    match (legible, mark, large) {
+        (true, true, _) => (r < 3.0).then_some((Level::P1, 3.0)),
+        (true, false, true) => (r < 3.0).then_some((Level::P0, 3.0)),
+        (true, false, false) => if r < 3.0 { Some((Level::P0, 3.0)) } else { (r < MIN_CONTRAST).then_some((Level::P1, MIN_CONTRAST)) },
+        (false, ..) => (r < 3.0).then_some((Level::P3, 3.0)),
+    }
+}
 fn contrast<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], out: &mut Vec<Finding>) {
     for (i, line, r) in line_contrast(ui, px, ground) {
-        let legible = ui.nodes()[i].legible;
-        let (level, limit) = if legible && is_mark(ui, i) { if r < 3.0 { (Level::P1, 3.0) } else { continue } }
-            else if legible { if r < 3.0 { (Level::P0, 3.0) } else if r < MIN_CONTRAST { (Level::P1, MIN_CONTRAST) } else { continue } }
-            else if r < 3.0 { (Level::P3, 3.0) } else { continue };
+        let Some((level, limit)) = base_contrast(ui.nodes()[i].legible, is_mark(ui, i), is_large(ui, i), r) else { continue };
         out.push(Finding { level, key: ui.nodes()[i].key.clone(), kind: Kind::Contrast, measured: r, limit,
             fix: format!("line {} reads {r:.2}:1 against what is drawn under it (needs {limit}:1): use a stronger paint (`Paint::TEXT` or `Paint::INK`), or a calmer ground under it", line + 1) });
     }
@@ -575,7 +592,8 @@ fn rules_found<S, M: Clone>(ui: &mut Ui<S, M>, px: &[u8], ground: &[u8], theme: 
     });
     if prose_min.is_some() || read_min.is_some() {
         for (i, line, r) in line_contrast(ui, px, ground) {
-            if !ui.nodes()[i].legible || is_mark(ui, i) { continue; }
+            // Large text's floor is 3:1, which the base rule holds it to; a preset's floors are for the rest.
+            if !ui.nodes()[i].legible || is_mark(ui, i) || is_large(ui, i) { continue; }
             let prose = prose_min.filter(|_| is_prose(ui, i, theme));
             let (limit, what) = match (prose, read_min) {
                 (Some(p), Some(q)) if p >= q => (p, " for prose"),
@@ -667,6 +685,28 @@ fn measure<S, M: Clone>(ui: &mut Ui<S, M>, theme: &crate::style::Theme, by: &str
 
 #[cfg(test)]
 mod tests {
+    /// Large text is told by its size (24 px, or 19 bold) and needs 3:1: at 3.28:1 a 64 px headline and a
+    /// 20 px bold line pass, a 20 px and a 23 px regular line are P1s; under 3:1 large text is a P0.
+    #[test]
+    fn large_text_needs_three_to_one_by_its_size() {
+        use crate::el::{El, Paint, col, text};
+        fn view(_: &()) -> El<()> {
+            col().child(text("Headline", 64.0, Paint::ACCENT).key("h64")).child(text("Twenty", 20.0, Paint::TEXT).key("r20"))
+                .child(text("Twenty bold", 20.0, Paint::TEXT).weight(1.0).key("b20")).child(text("Twenty three", 23.0, Paint::TEXT).key("r23"))
+                .child(text("Nineteen bold", 19.0, Paint::TEXT).weight(0.6).key("b19")).child(text("Eighteen bold", 18.0, Paint::TEXT).weight(1.0).key("b18"))
+        }
+        let faces = crate::text::load_bundled(concat!(env!("CARGO_MANIFEST_DIR"), "/assets")).expect("fonts");
+        let ui = crate::ui::Ui::new((), view, |_, _| {}, faces, 640, 480, 1.0);
+        let at = |k: &str| ui.nodes().iter().position(|n| n.key == k).expect("node");
+        let judged = |k: &str, r: f32| super::base_contrast(true, false, super::is_large(&ui, at(k)), r);
+        assert_eq!(judged("h64", 3.28), None, "a 64 px headline at 3.28:1 passes");
+        assert_eq!(judged("b20", 3.28), None, "20 px bold at 3.28:1 passes");
+        assert_eq!(judged("b19", 3.28), None, "19 px bold is large");
+        assert_eq!(judged("r20", 3.28), Some((super::Level::P1, super::MIN_CONTRAST)), "20 px regular at 3.28:1 is a P1");
+        assert_eq!(judged("r23", 3.28), Some((super::Level::P1, super::MIN_CONTRAST)), "23 px regular at 3.28:1 is a P1");
+        assert_eq!(judged("b18", 3.28), Some((super::Level::P1, super::MIN_CONTRAST)), "18 px bold is not large");
+        assert_eq!(judged("h64", 2.9), Some((super::Level::P0, 3.0)), "large text under 3:1 is a P0");
+    }
     /// With no bend the frame read back is the frame, byte for byte.
     #[test]
     fn unbend_with_no_bend_is_the_frame_itself() {

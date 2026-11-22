@@ -328,6 +328,10 @@ impl Text {
     /// Native size of a pixel face, px.
     pub fn native(&self, face: u8) -> Option<f32> { self.family(face).pixel }
     fn family(&self, face: u8) -> &Family { &self.families[self.real(face).0] }
+    /// The weight face `face` declares (its OS/2 class: 400 regular, 700 bold; 400 when it says none).
+    pub fn weight(&self, face: u8) -> u16 {
+        swash::FontRef::from_index(&self.family(face).data, 0).map_or(400, |f| f.attributes().weight().0)
+    }
     /// The family text in `face` is really set in, and the size factor: a declared face that has not
     /// come is set in its stand-in.
     fn real(&self, face: u8) -> (usize, f32) {

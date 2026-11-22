@@ -3117,7 +3117,7 @@ Everything is measured; each `fix` is one sentence to act on, naming the element
 | kind | what is measured | level |
 |---|---|---|
 | `Clipped` | text to read whose ink (`Instance` boxes after poses and turns) is cut by a clip, the window or a reveal; or a word drawn in part | a whole glyph or more, or a word in part: P0; less than a glyph: P1 |
-| `Contrast` | per line of text, the strongest ink pixel against what is drawn under it (WCAG 2) | text to read below 3:1 P0, below 4.5:1 P1; a lone mark (no letter or digit, such as › or −) below 3:1 P1; text not to read below 3:1 P3 |
+| `Contrast` | per line of text, the strongest ink pixel against what is drawn under it (WCAG 2) | text to read below 3:1 P0, below 4.5:1 P1; large text to read (a font size of 24 px or more, or 19 px bold: `El::weight` of half a pixel or more, or a face of weight 600 or more) below 3:1 P0 and nothing more; a lone mark (no letter or digit, such as › or −) below 3:1 P1; text not to read below 3:1 P3 |
 | `Overlap` | the share of a glyph's ink covered by another drawn glyph, in one element or between two to read | text to read over 10 %: P1; posed text over its `overlap` + 0.05: P2 |
 | `Small` | the drawn height of text to read (size × scale × the pose's vertical scale) | under 9 device px: P1 |
 | `Eroded` | at looseness 0, the ink pixels (differing from the ground by at least 24 and by at least half the line's contrast) inside each text-to-read ink box, against the same page drawn in `plain` | under 85 % of plain's: P1 |
@@ -3143,6 +3143,8 @@ presets: running text 7:1 and all text to read 4.5:1; text size, margin and meas
 12/14/64 (Neo-Dotmatrix), 12/16/72 (Lo-Fi Print), 12/24/72 (Glitch), 12/16/68 (Metamorphosis Linocut and Bauhaus),
 11/24/80 (Tech-Manual), 12/12/80 (Normcore), 11/16/80 (Cyberminimalism), 11/16/72 (Loose Thread); an accent share
 of 2 % for Tech-Manual and Normcore and 1 % for Cyberminimalism and Loose Thread. The default looks have none.
+A preset's contrast rules are not for large text: its floor is the 3:1 the base rule holds it to (no preset has
+a floor of its own for it).
 
 For them the recipes changed: the preset and form3d recipes' descriptions are `TEXT` (running text in `DIM` is
 5–6.4:1 in five presets), the stack recipe's formula is 12 px, and the gesture recipe's floating label is padded
