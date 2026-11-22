@@ -648,7 +648,7 @@ fn the_filter_up_differs_from_the_samplers_by_one_step_at_most() {
         let (w, h) = ((W as f32 * scale) as u32, (H as f32 * scale) as u32);
         let (Ok(mut own), Ok(mut samp)) = (Offscreen::try_new(w, h), Offscreen::try_new(w, h)) else { eprintln!("no GPU adapter here: skipped"); return };
         for o in [&mut own, &mut samp] { o.r.partial = false; o.r.always_lo = true; }
-        samp.r.up_by_sampler(true);
+        samp.r.checks(true, false);
         let mut seen = 0;
         for q in [1.0f32, 0.75, 0.5, 0.375] {
             for mat in [Material::Plain, Material::Dottr] {

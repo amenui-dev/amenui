@@ -73,9 +73,19 @@ fn m_charr_cells(p: vec2f) -> vec3f {
     let ca = cell_avg(cell, P);
     if (ca.a > 0.02 && dec_at(ca, centre).acc > 0.5) { return gnd(p); }
   }
+  // The least characters of this cell and the four beside it that reach here (one moved onto a thin
+  // line), within the nearness of ink only.
+  var fl = vec4f(0.0);
+  if (near_t(p).r > 0.0) {
+    for (var k = 0; k < 5; k++) {
+      let dk = select(select(vec2f(0.0, f32(k * 2 - 7)), vec2f(f32(k * 2 - 3), 0.0), k < 3), vec2f(0.0), k == 0);
+      let f = charr_floor(p, cell + dk, P, levels);
+      if (f.w > fl.w) { fl = f; }
+    }
+  }
   // Characters only where the ink is really loose (its own looseness: text to read keeps its island
   // above, and the cells round it are whole characters).
-  if (kt_loose_own(centre) <= 0.1 + 0.4 * h1(cell + 1.3)) { return exact(p); }
+  if (kt_loose_own(centre) <= 0.1 + 0.4 * h1(cell + 1.3)) { return mix(exact(p), fl.rgb, fl.w); }
   // A cell over a picture's edge is not made into characters: the picture keeps its own edge.
   let o0 = cell * P - anc;
   for (var j = 0; j < 3; j++) { for (var i = 0; i < 3; i++) {
@@ -114,7 +124,60 @@ fn m_charr_cells(p: vec2f) -> vec3f {
       m = clamp(max(1.0, P * 0.14) - dist + 0.5, 0.0, 1.0) * step(abs(dot(q, dir)), 0.42) * step(0.02, avg.a);
     }
   }
+  // A cell sampled under the floor with ink in it has its least character on the line instead (`fl`).
+  if (m < 0.0 && avg.a < INK_FLOOR && !(hc > 0.0 && avg.a > 0.02) && cell_ink(centre, P * 0.5).z > 0.0) { m = 0.0; }
   if (m < 0.0) { m = char_mark(round(n * 15.0 / (levels - 1.0)), fract(lat(p) / P), P); }
   var colour = select(d.rgb, u.fg.rgb, a0.z >= 0.5);
+  if (fl.w > m) { return mix(gnd(p), select(fl.rgb, u.fg.rgb, a0.z >= 0.5), fl.w); }
   return mix(gnd(p), colour, m);
+}
+/// The least character of the cell `cell` at pitch `P` where it covers `p` (DESIGN.md §1.6): in a loose
+/// cell with ink in it sampled under `INK_FLOOR` (a thin line's), the lightest character that
+/// is not blank, its ink centred on the line's centreline across the line, as a thin accent rule's row is
+/// (§1.6.2), in the line's colour (`w`: how much of `p` it covers).
+fn charr_floor(p: vec2f, cell: vec2f, P: f32, levels: f32) -> vec4f {
+  let centre = (cell + 0.5) * P - anc;
+  if (kt_loose_own(centre) <= 0.1 + 0.4 * h1(cell + 1.3)) { return vec4f(0.0); }
+  let avg = cell_avg(cell, P);
+  if (avg.a >= INK_FLOOR || (hold_at(centre) > 0.0 && avg.a > 0.02)) { return vec4f(0.0); }
+  let e = cell_ink(centre, P * 0.5);
+  if (e.z <= 0.0) { return vec4f(0.0); }
+  // Across the line: of the two runs of ink through that pixel, across and down, the shorter, to its
+  // middle (the line's centreline).
+  var run = vec4f(0.0);
+  for (var a = 0; a < 4; a++) {
+    let dir = select(select(vec2f(0.0, -1.0), vec2f(0.0, 1.0), a == 3), select(vec2f(-1.0, 0.0), vec2f(1.0, 0.0), a == 1), a < 2);
+    for (var k = 1; k <= 8; k++) { if (ink_t(e.xy + dir * f32(k)).a < 0.5) { break; } run[a] = f32(k); }
+  }
+  let down = run.z + run.w <= run.x + run.y;
+  let ax = select(vec2f(1.0, 0.0), vec2f(0.0, 1.0), down);
+  let lo = select(run.x, run.z, down);
+  let hi = select(run.y, run.w, down);
+  let mid = dot(e.xy, ax) + (hi - lo) * 0.5;
+  // The character's ink box in its tile (`marks::INK_BOX_ROW`), and where its tile goes: the cell's, moved
+  // across the line by whole pixels so the box's centre is on the centreline.
+  let ir = i32(((CHAR_MAX + 1.0) * CHAR_MAX - CHAR_MIN * (CHAR_MIN - 1.0)) * 0.5);
+  let bx = i32(4.0 * (P - CHAR_MIN));
+  let b = vec4f(textureLoad(chars, vec2i(bx, ir), 0).r, textureLoad(chars, vec2i(bx + 1, ir), 0).r, textureLoad(chars, vec2i(bx + 2, ir), 0).r, textureLoad(chars, vec2i(bx + 3, ir), 0).r) * 255.0;
+  let o0 = cell * P - anc;
+  // Ink 8 px across or more is no thin line: the character stays in its cell.
+  var o2 = select(vec2f(o0.x, round(mid - 0.5 * (b.y + b.w))), vec2f(round(mid - 0.5 * (b.x + b.z)), o0.y), ax.x > 0.5);
+  if (lo >= 8.0 || hi >= 8.0) { o2 = o0; } else {
+    // At the line's end (in sight along it), the character's ink is kept within the line's length: past
+    // it the ground does not know the line is loose and the character would be cut.
+    let al = vec2f(1.0) - ax;
+    let b0 = dot(b.xy, al);
+    let b1 = dot(b.zw, al);
+    let r0 = select(run.x, run.z, !down);
+    let r1 = select(run.y, run.w, !down);
+    var oa = dot(o2, al);
+    if (r0 < 8.0) { oa = max(oa, ceil(dot(e.xy, al) - 0.5 - r0 - b0)); }
+    if (r1 < 8.0) { oa = min(oa, floor(dot(e.xy, al) + 0.5 + r1 - b1)); }
+    o2 = o2 * ax + oa * al;
+  }
+  let t = floor(p) - o2;
+  if (any(t < vec2f(0.0)) || any(t >= vec2f(P))) { return vec4f(0.0); }
+  let row = (P * (P - 1.0) - CHAR_MIN * (CHAR_MIN - 1.0)) * 0.5;
+  let m = textureLoad(chars, vec2i(i32(P + t.x), i32(row + t.y)), 0).r;
+  return vec4f(dec(e.xy).rgb, m);
 }

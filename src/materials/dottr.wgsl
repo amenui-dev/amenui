@@ -31,9 +31,11 @@ fn m_dottr(frag: vec2f) -> vec3f {
   var col: vec3f; var alpha: f32;
   if (loose > 0.3) {
     let q = pitch * 0.25;
-    let c = (ink(block + vec2f(-q, -q)) + ink(block + vec2f(q, -q)) + ink(block + vec2f(-q, q)) + ink(block + vec2f(q, q))) * 0.25;
+    var c = (ink(block + vec2f(-q, -q)) + ink(block + vec2f(q, -q)) + ink(block + vec2f(-q, q)) + ink(block + vec2f(q, q))) * 0.25;
     let grow = smoothstep(0.3, 0.42, loose);
-    let d = dec_at(c, frag);
+    var d = dec_at(c, frag);
+    // A cell with ink in it that the taps (almost) missed, a thin line's: a dot of the least ink.
+    if (c.a < INK_FLOOR) { let e = cell_ink(block, pitch * 0.5); if (e.z > 0.0) { if (c.a < 1e-3) { d.rgb = dec(e.xy).rgb; } c.a = INK_FLOOR; } }
     var r = pitch * mix(0.5, 0.44 * sqrt(c.a), grow) * select(1.0, 0.96, u.fc.w > 0.5);
     // Units grow toward the island until they touch their neighbours by `r0`.
     r = mix(r, max(r, pitch * 0.56), smoothstep(0.15, 0.85, hb));

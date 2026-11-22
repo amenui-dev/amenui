@@ -340,6 +340,21 @@ such a subtree (an element with its own handler, other than a picture, canvas or
 says `legible` itself, so its fill and label stay at the cap as at rest: a showcase loosens its decoration, never its
 buttons. A tab list's heads and rule are the control (`tabs` marks them).
 
+**The least mark.** A thin line falls between a mark material's taps: a 1 px rule under `dottr` at looseness 1 had
+no dots at half the offsets from the cells. So a loose cell of `dottr` or `charr` with ink in it (a pixel of it at
+least half covered: the ink pixel nearest the cell's centre, found by the nearness and its gradient, is one of the
+cell's own pixels, its top and left edges in it and its bottom and right ones not; a cell wider than the nearness
+reaches is looked at as up to 4 × 4 smaller ones) and sampled below `INK_FLOOR` = 0.25 is drawn as if sampled at
+0.25: `dottr` a dot of that ink, `charr` the lightest character that is not blank, its ink box (`marks::INK_BOX_ROW`)
+centred across the line on the line's centreline, as a thin accent rule's row is (§1.6.2), and kept within the line's
+length at its ends; in the ink's own colour. A cell sampled at 0.25 or more is as it was, so a solid face or the inside
+of a large letter does not get heavier, and a line lights one row (column) of cells, the lower (right) one when it lies
+on the edge between two. `halftonr` has no floor: its line is drawn exactly under its screens. `tests/thin_lines.rs`:
+a 1 px line at every offset in a cell has a mark in each cell it crosses (dottr 25 of 25, charr 14 of 14, one row),
+charr's characters centred within 2 px and whole; under halftonr every pixel of the line is ink (24/255 off the ground)
+and its screens' dots stay within a pitch; a solid square changes only within 1.5 cells of its edge; a fanning card
+stack's edges have marks all along. `Renderer::checks` draws without the floor for the comparison.
+
 **Names.** A material that prints the page is named for what it does, the verb with an `r`: `dottr`, `halftonr`,
 `charr`, `smudgr` (ink that spreads, specks and falls out of register), `carvr`, `glitchr`, `scribblr`. `plain`
 (nobody's hand) and `near` (the mechanism laid open) are not printings and keep their names. The same rule names
@@ -3327,7 +3342,7 @@ neighbours are not all the stage's is shaded at the device's scale, so the stage
 grid is fixed to the content of the largest scroll area: its texels' centres are at `(i + n0 + ½) / q` device px
 less the area's offset modulo `GRID_WRAP` = 1536 px (a whole number of texels at every scale, 2/3, 3/8, 1/2 and
 3/4 of the device's), on 1/256 px, and the filter up weighs its four texels itself (`textureLoad`) by where the
-pixel is among their centres; against the sampler's filter for the same reduced pass (`Renderer::up_by_sampler`,
+pixel is among their centres; against the sampler's filter for the same reduced pass (`Renderer::checks`,
 its weights in 8 bits on most GPUs) no channel differs by more than 1/255, at any offset of the grid, and at full
 quality there is no filter up (`tests/scroll_move.rs`). So a stage the scroll carried by whole device px is, pixel for pixel, the stage
 shaded where it is, and a moved frame keeps it. A stage is shaded again where the grid moved under it: every one

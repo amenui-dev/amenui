@@ -81,9 +81,12 @@ override MAT: i32 = -1;
 /// pixel finds its material as the pass for any does, and the pass draws only those of `MAT` (`shade_new`);
 /// the others are drawn by the passes for theirs.
 override ONLY: bool = false;
-/// The filter up done by the sampler (`Renderer::up_by_sampler`): the check that the filter weighing its four
+/// The filter up done by the sampler (`Renderer::checks`): the check that the filter weighing its four
 /// texels itself differs from the sampler's by a step of 8 bits at most.
 override SAMPLED_UP: bool = false;
+/// No least ink in loose cells (`INK_FLOOR`, `Renderer::checks`): the check that only cells sampled below
+/// it change.
+override NO_INK_FLOOR: bool = false;
 /// The material an instance (or a pixel) is drawn with: its override, or the global one.
 fn eff_mat(code: f32) -> i32 { if (MAT >= 0 && !ONLY) { return MAT; } if (code >= 127.5) { return i32(round(code)) % 16; } return i32(u.fd.x); }
 /// The extreme's hue code (`Paint::EXTREME_CODE`: after the theme's three and the drawings' 32).
@@ -1111,6 +1114,36 @@ fn dec(p: vec2f) -> Ink { return dec_at(ink_t(p), p); }
 fn exact(p: vec2f) -> vec3f { let d = dec(p); return mix(gnd(p), d.rgb, d.a); }
 /// Signed distance to the nearest outline (device px, positive inside), up to SPREAD either way.
 fn sdist(p: vec2f) -> f32 { return (near_t(p).r - 0.5) * 2.0 * u.fd.z; }
+/// `sdist` filtered between texel centres (`near`), for a distance at any point.
+fn sdist_f(p: vec2f) -> f32 { return (near(p).r - 0.5) * 2.0 * u.fd.z; }
+/// The least a loose cell with ink in it is drawn with (DESIGN.md §1.6): a cell of a mark material that
+/// some ink at least half covers a pixel of, sampled below this, is drawn as if sampled at this, so a thin
+/// line is a row of the least marks and not gone; a cell sampled at this or more is as it was.
+const INK_FLOOR: f32 = 0.25;
+/// The ink in the cell centred at `c`, `h` from its centre to each side (text or a shape, not a picture):
+/// the centre of the pixel of ink nearest the centre (half a pixel past the outline, covered at least
+/// half) when it is one of the cell's pixels (the cell's top and left edges in it, its bottom and right ones
+/// not), in `xy` with `z` 1; `z` 0 when there is none. So a line of whole pixels lights the one row
+/// (column) of cells it is in, and a line on the edge between two goes to the lower (right) one. A cell
+/// larger than the nearness reaches is looked at as up to 4 x 4 smaller ones.
+fn cell_ink(c: vec2f, h: f32) -> vec3f {
+  if (NO_INK_FLOOR) { return vec3f(0.0); }
+  let n = clamp(ceil((h * 1.415 + 1.0) / (u.fd.z - 1.0)), 1.0, 4.0);
+  let hs = h / n;
+  for (var j = 0; j < 4; j++) {
+    if (f32(j) >= n) { break; }
+    for (var i = 0; i < 4; i++) {
+      if (f32(i) >= n) { break; }
+      let q = c - vec2f(h) + (vec2f(f32(i), f32(j)) * 2.0 + 1.0) * hs;
+      let d = sdist_f(q);
+      if (d < 0.5 - u.fd.z) { continue; }
+      let g = sgrad(q);
+      let at = floor(select(q, q + g / max(length(g), 1e-3) * (0.5 - d), d < 0.5)) + 0.5;
+      if (ink_t(at).a >= 0.5 && near_t(at).g <= 0.05 && all(at >= c - vec2f(h)) && all(at < c + vec2f(h))) { return vec3f(at, 1.0); }
+    }
+  }
+  return vec3f(0.0);
+}
 fn sgrad(p: vec2f) -> vec2f {
   return vec2f(sdist(p + vec2f(1.0, 0.0)) - sdist(p - vec2f(1.0, 0.0)), sdist(p + vec2f(0.0, 1.0)) - sdist(p - vec2f(0.0, 1.0))) * 0.5;
 }

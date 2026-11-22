@@ -10,6 +10,11 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Marks only while the cards move
 
+- Under `dottr` and `charr` a thin line at looseness 1 is a row of the least marks instead of falling between the
+  cells: a loose cell with ink in it sampled below 0.25 (`INK_FLOOR`) is drawn as if sampled at 0.25 (`dottr` a dot,
+  `charr` the lightest character, centred on the line). Cells sampled at 0.25 or more are drawn as before; `halftonr`
+  is unchanged.
+
 - A card stack under `dottr`, `charr` and `halftonr` is drawn as under `plain` at rest: its cards loosen to 1 within
   120 ms while a card's spring moves (`LOOSEN_S`) and back to 0 within 240 ms after the last one stops (`TIGHTEN_S`),
   and then ask for no frames. They had been held at looseness 1. `Stack::moving` is true until they are tight.

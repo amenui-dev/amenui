@@ -316,7 +316,11 @@ pub const CHAR_MAX: usize = 40;
 /// Row offset of the tiles of pitch `p` (rows of all smaller pitches above it).
 pub const fn char_row(p: usize) -> usize { (p * (p - 1) - CHAR_MIN * (CHAR_MIN - 1)) / 2 }
 pub const CHAR_W: usize = CHAR_MAX * LEVELS;
-pub const CHAR_H: usize = char_row(CHAR_MAX + 1);
+/// The row under the tiles: for each pitch `p`, at columns `4 (p − CHAR_MIN)` on, the ink box of its
+/// lightest character that is not blank (level 1), in texels: left, top, right, bottom (the last two past
+/// it). The shader centres that character's ink on a thin line (DESIGN.md §1.6).
+pub const INK_BOX_ROW: usize = char_row(CHAR_MAX + 1);
+pub const CHAR_H: usize = INK_BOX_ROW + 1;
 
 pub struct CharTiles {
     /// R8, `CHAR_W` × `CHAR_H`.
@@ -341,6 +345,13 @@ pub fn char_tiles(text: &mut Text, face: u8) -> CharTiles {
         let set = if p < 8 { shrink(&eight, 8, p) } else { char_set(text, face, p) };
         for (level, (_, _, _, tile)) in set.iter().enumerate() {
             for y in 0..p { for x in 0..p { pixels[(char_row(p) + y) * CHAR_W + level * p + x] = tile[y * p + x]; } }
+            if level == 1 {
+                let inked = |x: usize, y: usize| tile[y * p + x] > 0;
+                let b = (0..p).flat_map(|y| (0..p).map(move |x| (x, y))).filter(|&(x, y)| inked(x, y))
+                    .fold([p, p, 0, 0], |b, (x, y)| [b[0].min(x), b[1].min(y), b[2].max(x + 1), b[3].max(y + 1)]);
+                let b = if b[2] > b[0] { b } else { [0, 0, p, p] };
+                for (k, v) in b.into_iter().enumerate() { pixels[INK_BOX_ROW * CHAR_W + 4 * (p - CHAR_MIN) + k] = v as u8; }
+            }
         }
         let mut c = [(' ', false, 0.0); LEVELS];
         for (i, t) in set.iter().enumerate() { c[i] = (t.0, t.1, t.2); }
