@@ -724,7 +724,7 @@ impl Renderer {
             let radius = ((SPREAD as f32 / px).ceil() + 1.0).clamp(2.0, 40.0);
             let cam = &sc.camera;
             let u = MeshUniforms {
-                view: cam.view().0, proj: cam.proj(rw / rh).0,
+                view: cam.view().0, proj: sc.proj_in(rw, rh).0,
                 light: [sc.light.dir[0], sc.light.dir[1], sc.light.dir[2], sc.light.ambient.clamp(0.0, 1.0)],
                 misc: [cam.near.max(1e-3), cam.far.max(cam.near + 1e-3), sc.spec.edge_depth.max(0.0), sc.spec.edge_normal.clamp(0.0, 180.0).to_radians().cos()],
                 size: [size.0 as f32, size.1 as f32, px, radius], spread: [SPREAD as f32, sc.spec.tones, sc.spec.terminator.clamp(0.0, 1.0), 0.0],

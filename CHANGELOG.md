@@ -23,8 +23,10 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
   edge as `Clipped` (`audit::bent_off`). Breaking: `PostSpec` and `Post` have `clear_text`, `Scene` has `legible`.
 - The audit tells large text by its size (`audit::LARGE_PX` 24, `LARGE_BOLD_PX` 19 when bold): it needs 3:1, a P0
   under it, and a preset's contrast rules do not apply to it. A 64 px headline at 3.28:1 passes.
-- At rest a card stack's flat cards are on whole pixels (`Stack::fit`, `Stack::scene_in`): each side's outline is
-  one pixel at its grey, where the top and right ones had been two at half strength. A 3D element's edge on a pixel
+- At rest a card stack's flat cards are on whole device pixels however large the box is drawn (a page's `El::fit`
+  zoom too): each side's outline is one pixel at its grey, where the top and right ones had been two at half
+  strength. `Mesh3d.snap` names a rectangle an orthographic view puts on whole device pixels (`Scene3d::proj_in`);
+  the card stack's scene sets it to its top card. Breaking: `Mesh3d` has `snap`. A 3D element's edge on a pixel
   boundary reads as exactly there (the resolve's zero on a whole step, and distances within a step of a half pixel
   taken as that), so it covers the pixel inside fully and the one outside not at all.
 

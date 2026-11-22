@@ -156,23 +156,10 @@ impl Stack {
         self.loose = if on { (l0 + (now - t0).max(0.0) / LOOSEN_S).min(1.0) } else { (l0 - (now - t0).max(0.0) / TIGHTEN_S).max(0.0) };
         moved || self.loose != was
     }
-    /// The cards as a 3D scene: card 0 on top (nearest), each turned about its bottom-left corner.
+    /// The cards as a 3D scene: card 0 on top (nearest), each turned about its bottom-left corner. Flat
+    /// (not `Thick`), the top card's rectangle is on whole device pixels however large the box is drawn
+    /// (`Mesh3d::snap`), so at rest its outline is one whole pixel on every side, not two half ones.
     pub fn scene(&self) -> Scene3d { let (w, h) = self.card; self.scene_of((w, h), (-w * 0.4, -h * 0.7)) }
-    /// The cards' size and the corner they turn about (world units) in a box `width` × `height` (logical
-    /// px): at rest a flat card's edges are on whole pixels, the corner and the far edges each moved to the
-    /// nearest (under half a pixel), so its outline is one whole pixel on every side, not two half ones.
-    pub fn fit(&self, width: f32, height: f32) -> ((f32, f32), (f32, f32)) {
-        let (w, h) = self.card;
-        if self.look == StackLook::Thick || height <= 0.0 { return ((w, h), (-w * 0.4, -h * 0.7)); }
-        // The straight-on camera shows 1.25 units of height across the box, its centre at the box's.
-        let k = height / ORTHO_HEIGHT;
-        let left = (width * 0.5 - w * 0.4 * k).round();
-        let bottom = (height * 0.5 + h * 0.7 * k).round();
-        let (wp, hp) = ((w * k).round().max(1.0), (h * k).round().max(1.0));
-        ((wp / k, hp / k), ((left - width * 0.5) / k, (height * 0.5 - bottom) / k))
-    }
-    /// The cards as a 3D scene fitted to a box `width` × `height` (`Stack::fit`).
-    pub fn scene_in(&self, width: f32, height: f32) -> Scene3d { let (card, pivot) = self.fit(width, height); self.scene_of(card, pivot) }
     fn scene_of(&self, (w, h): (f32, f32), (px, py): (f32, f32)) -> Scene3d {
         let colours = &self.paints;
         let thick = self.look == StackLook::Thick;
@@ -187,7 +174,8 @@ impl Stack {
         let camera = if thick { Camera { projection: Projection::Perspective { fov: 34.0 }, yaw: -22.0, pitch: 24.0, distance: 2.3, target: [0.0, 0.0, -0.06], ..Camera::default() } }
             else { Camera { projection: Projection::Orthographic { height: ORTHO_HEIGHT }, yaw: 0.0, pitch: 0.0, distance: 3.0, target: [0.0, 0.0, 0.0], ..Camera::default() } };
         // Supersampled twice: a turned card's outline is a smooth line, not steps of whole texels.
-        let spec = Mesh3d { tones: 2.0, outline: if thick { 1.2 } else { self.outline }, resolution_scale: 2.0, ..Mesh3d::default() };
+        let snap = (!thick).then_some([px, py, px + w, py + h]);
+        let spec = Mesh3d { tones: 2.0, outline: if thick { 1.2 } else { self.outline }, resolution_scale: 2.0, snap, ..Mesh3d::default() };
         Scene3d { items, camera, light: Light::from_angles(-30.0, 50.0, 0.55), spec, picture: None }
     }
 }
@@ -197,7 +185,7 @@ pub fn card_stack<M: Clone + 'static>(key: &str, s: &Stack, width: f32, height: 
     let msg = Rc::new(msg);
     let (a, b) = (msg.clone(), msg);
     let card = |h: Option<MeshHit>| h.map(|h| h.object.saturating_sub(1) as usize);
-    let mut e = scene3d(s.scene_in(width, height)).key(key.to_owned()).width(width).height(height).focusable(true).role(Role::Group).label(crate::i18n::tr("widget.stack.label"))
+    let mut e = scene3d(s.scene()).key(key.to_owned()).width(width).height(height).focusable(true).role(Role::Group).label(crate::i18n::tr("widget.stack.label"))
         .on_pick(move |p| Some(a(match p { Pick::Hover(h) => StackMsg::Hover(card(h)), Pick::Press(h) => StackMsg::Press(card(h)) })))
         .on_key(move |k, _| matches!(k, Key::Up | Key::Down | Key::Left | Key::Right | Key::Enter | Key::Char(' ') | Key::Escape).then(|| b(StackMsg::Key(k))));
     // Marks: the material draws the cards as `plain` does at rest, as its marks while they fan and settle.
@@ -205,7 +193,8 @@ pub fn card_stack<M: Clone + 'static>(key: &str, s: &Stack, width: f32, height: 
     // The cards swing inside one 3D element: a point at each card's far corner (where it is in the
     // view, as the straight-on camera shows it) stirs the field map as the card turns (DESIGN.md
     // §1.29). The stack is a stirring element itself, so its cards do not read their own trail.
-    let ((w, h), (px, py)) = s.fit(width, height);
+    let (w, h) = s.card;
+    let (px, py) = (-w * 0.4, -h * 0.7);
     let k = height / ORTHO_HEIGHT;
     for i in 0..s.count {
         let (sn, cs) = s.angle_of(i).to_radians().sin_cos();

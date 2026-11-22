@@ -470,8 +470,13 @@ pub struct Mesh3d {
     /// A drawn outline on the silhouette and the creases, logical px (0: none; the materials still see
     /// the edges in the nearness).
     pub outline: f32,
+    /// A rectangle of the plane z = 0 (world units, `[x0, y0, x1, y1]`) that an orthographic view puts on
+    /// whole device pixels, at whatever size and scale the element is drawn: each of its edges moves to
+    /// the nearest (under half a pixel; the view is scaled and shifted that little along each axis), so a
+    /// flat face there has its outline on one whole pixel on every side. `None`: as the camera puts it.
+    pub snap: Option<[f32; 4]>,
 }
-impl Default for Mesh3d { fn default() -> Self { Self { resolution_scale: 0.5, edge_depth: 0.04, edge_normal: 15.0, tones: 0.0, terminator: 0.3, outline: 0.0 } } }
+impl Default for Mesh3d { fn default() -> Self { Self { resolution_scale: 0.5, edge_depth: 0.04, edge_normal: 15.0, tones: 0.0, terminator: 0.3, outline: 0.0, snap: None } } }
 
 /// Copies of one mesh, drawn in one call: every transform is one copy. `id` names the group in picks.
 /// `outline`: the grey its drawn outline (`Mesh3d::outline`) takes, by its tone (`None`: the ink).
@@ -525,7 +530,30 @@ impl Scene3d {
         match c.projection { Projection::Perspective { fov } => { f(0.0); f(fov) } Projection::Orthographic { height } => { f(1.0); f(height) } }
         for v in [c.yaw, c.pitch, c.distance, c.target[0], c.target[1], c.target[2], c.near, c.far, self.light.dir[0], self.light.dir[1], self.light.dir[2], self.light.ambient,
                   self.spec.resolution_scale, self.spec.edge_depth, self.spec.edge_normal, self.picture.map_or(-1.0, |p| p as f32)] { f(v); }
+        for v in self.spec.snap.unwrap_or([f32::NAN; 4]) { f(v); }
         h.finish()
+    }
+    /// The camera's projection for a view `rw` × `rh` device px, with `Mesh3d::snap`'s rectangle on
+    /// whole device pixels (an orthographic camera; any other as it is).
+    pub fn proj_in(&self, rw: f32, rh: f32) -> Mat4 {
+        let p = self.camera.proj(rw / rh);
+        let (Some([x0, y0, x1, y1]), Projection::Orthographic { .. }) = (self.spec.snap, self.camera.projection) else { return p };
+        let m = p.mul(&self.camera.view()).0;
+        let ndc = |x: f32, y: f32| (m[0] * x + m[4] * y + m[12], m[1] * x + m[5] * y + m[13]);
+        let ((ax, ay), (bx, by)) = (ndc(x0, y0), ndc(x1, y1));
+        // Along one axis (`u` from -1 to 1 across `n` px): the scale and shift that move both edges to
+        // the nearest whole px.
+        let axis = |u0: f32, u1: f32, n: f32| {
+            let (d0, d1) = ((u0 + 1.0) * 0.5 * n, (u1 + 1.0) * 0.5 * n);
+            let (r0, r1) = (d0.round(), d1.round());
+            if (d1 - d0).abs() < 1e-3 || r0 == r1 { return (1.0, 0.0); }
+            let s = (r1 - r0) / (d1 - d0);
+            (s, s - 1.0 + 2.0 * (r0 - s * d0) / n)
+        };
+        let (sx, ox) = axis(ax, bx, rw);
+        // Down the view, from its top: y flipped.
+        let (sy, oy) = axis(-ay, -by, rh);
+        Mat4([sx, 0.0, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, ox, -oy, 0.0, 1.0]).mul(&p)
     }
     /// The copy under a point of the view (fractions 0..1 of the element from its top left), nearest
     /// first: the same transforms the GPU draws, intersected on the CPU (Möller–Trumbore).

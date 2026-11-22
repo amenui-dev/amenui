@@ -2079,7 +2079,11 @@ at 2 a pixel covers its own 2 × 2 texels and stands for the lower right one (th
 about a tenth of a pixel (half a step stored, half filtered); its zero is on a whole step (128 of 255), and a
 distance within one step of half a pixel and a whole number more is taken as that (`mesh_snap`), so an edge on a
 pixel boundary covers the pixel inside it fully, the one outside not at all, and a 1 px outline is exactly its
-grey with nothing beside it. A turned edge's distances are as read.
+grey with nothing beside it. A turned edge's distances are as read. To put a face's edges on pixel
+boundaries at whatever size the element is drawn (a box zoomed by `El::fit`, any scale), `Mesh3d.snap` names a
+rectangle of the plane z = 0: under an orthographic camera the projection is scaled and shifted along each axis
+(`Scene3d::proj_in`, from the device rect the element is drawn in) so that its four edges land on the nearest
+whole device pixels, under half a pixel each. Picks use the camera as it is (under half a pixel apart).
 
 **The resolve.** Three small full-screen passes: `mask` (covered pixels are silhouette; a covered pixel whose
 right or lower neighbour is a different instance, whose depth jumps more than `edge_depth` (relative depth,
@@ -2529,9 +2533,9 @@ afterwards).
 `widgets::card_stack` (`Stack { count 5, angle0 42, falloff 0.7, delay_ms 28, spring (k 260, c 24), look, card,
 paints, outline, outlines }`). By default every card is raised (`paints [RAISED]`), outlined 1 px (`outline`), the
 top card in the ink and the ones under it in the hairline grey (`outlines [INK, HAIRLINE]`: card n takes entry n,
-the last one repeating; empty, the ink); categories are not told apart by the accents. Flat cards are fitted to
-their box (`Stack::fit`, which `card_stack` draws with): the corner they turn about and their far edges move to the
-nearest whole pixel (under half a pixel each), so at rest each side's outline is one whole pixel at its grey, not
+the last one repeating; empty, the ink); categories are not told apart by the accents. Flat, the top card's
+rectangle is the scene's `Mesh3d.snap`: its edges are on whole device pixels however large the box is drawn (a
+page that zooms it to fit a narrow window too), so at rest each side's outline is one whole pixel at its grey, not
 two at half strength.
 Hovering or pressing a card (a 3D element's `Pick`) turns the n-th card beneath it (n from 0) to
 `angle0 × falloff^n` degrees, starting after `delay_ms × n` ms, each with its own spring with velocity hand-off
