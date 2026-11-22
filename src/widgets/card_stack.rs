@@ -15,8 +15,9 @@
 //! card beneath it) after `delay(n) = delay_ms · n`, about its bottom-left corner; cards above it stay
 //! closed. The cards are a 3D element (`scene3d`, one cube per card), so the look follows the material:
 //! `StackLook::Plain` flat cards seen straight on, `Thick` cards with depth seen at an angle so their
-//! edges show (outlined, two tones), `Marks` flat cards drawn by a mark material (dot or ASCII) and held
-//! loose so the marks show at rest.
+//! edges show (outlined, two tones), `Marks` flat cards handed to a mark material (dot or ASCII): at rest
+//! drawn as in `plain`, loosening to 1 within `LOOSEN_S` while a card's spring moves and back to 0 within
+//! `TIGHTEN_S` after the last one stops (`Stack::looseness`).
 use crate::el::{El, Key, Paint, Role, scene3d};
 use crate::gesture::{Animated, Spring};
 use crate::mesh::{Camera, Light, Mat4, MeshHit, MeshId, MeshInstances, Mesh3d, Pick, Projection, Scene3d};
@@ -66,13 +67,21 @@ pub struct Stack {
     angles: Vec<Animated>,
     /// Card n's next target and when it starts.
     queue: Vec<Option<(f32, f32)>>,
+    /// The looseness of `Marks` cards now, and where its ramp started: the looseness then, when, and
+    /// whether toward 1 (a spring moving) or toward 0.
+    loose: f32,
+    ramp: (f32, f32, bool),
 }
+/// How long `Marks` cards take to loosen to 1 once a spring moves, and to tighten to 0 after the last
+/// one stops (s).
+pub const LOOSEN_S: f32 = 0.12;
+pub const TIGHTEN_S: f32 = 0.24;
 impl Default for Stack {
     fn default() -> Self {
         let spring = Spring { stiffness: 260.0, damping: 24.0, ..Spring::default() };
         let count = 5;
         Self { count, angle0: 42.0, falloff: 0.7, delay_ms: 28.0, spring, look: StackLook::Plain, card: (0.8, 0.52), paints: vec![Paint::RAISED], outline: 1.0, outlines: vec![Paint::INK, Paint::HAIRLINE], hover: None, held: None,
-               angles: vec![Animated::new(0.0, spring); count], queue: vec![None; count] }
+               angles: vec![Animated::new(0.0, spring); count], queue: vec![None; count], loose: 0.0, ramp: (0.0, 0.0, false) }
     }
 }
 impl Stack {
@@ -88,7 +97,14 @@ impl Stack {
     pub fn target_of(&self, i: usize) -> f32 {
         match self.under() { Some(k) if i > k => self.angle(i - k - 1), _ => 0.0 }
     }
-    pub fn moving(&self) -> bool { self.angles.iter().any(Animated::moving) || self.queue.iter().any(Option::is_some) }
+    /// Whether it wants frames: a card's spring moves or is due to start, or the cards are not yet back to
+    /// looseness 0.
+    pub fn moving(&self) -> bool { self.springing() || self.loose > 0.0 }
+    fn springing(&self) -> bool { self.angles.iter().any(Animated::moving) || self.queue.iter().any(Option::is_some) }
+    /// How loose `Marks` cards are now (0 at rest; 1 from `LOOSEN_S` after a spring started).
+    pub fn looseness(&self) -> f32 { self.loose }
+    /// The looseness ramp turns toward 1 (`on`) or 0 at `now`, from the looseness it is at.
+    fn turn(&mut self, on: bool, now: f32) { if self.ramp.2 != on { self.ramp = (self.loose, now, on); } }
     fn refan(&mut self, now: f32) {
         if self.angles.len() != self.count { self.angles = vec![Animated::new(0.0, self.spring); self.count]; self.queue = vec![None; self.count]; }
         let k = self.under();
@@ -97,6 +113,8 @@ impl Stack {
             let n = match k { Some(k) if i > k => i - k - 1, _ => 0 };
             self.queue[i] = Some((now + self.delay(n) / 1000.0, target));
         }
+        // The first card beneath starts now.
+        self.turn(true, now);
     }
     pub fn update(&mut self, m: StackMsg, now: f32) {
         let before = self.under();
@@ -129,7 +147,12 @@ impl Stack {
             }
             moved |= self.angles[i].step(now);
         }
-        moved
+        let springing = self.springing();
+        self.turn(springing, now);
+        let (l0, t0, on) = self.ramp;
+        let was = self.loose;
+        self.loose = if on { (l0 + (now - t0).max(0.0) / LOOSEN_S).min(1.0) } else { (l0 - (now - t0).max(0.0) / TIGHTEN_S).max(0.0) };
+        moved || self.loose != was
     }
     /// The cards as a 3D scene: card 0 on top (nearest), each turned about its bottom-left corner.
     pub fn scene(&self) -> Scene3d {
@@ -160,8 +183,8 @@ pub fn card_stack<M: Clone + 'static>(key: &str, s: &Stack, width: f32, height: 
     let mut e = scene3d(s.scene()).key(key.to_owned()).width(width).height(height).focusable(true).role(Role::Group).label(crate::i18n::tr("widget.stack.label"))
         .on_pick(move |p| Some(a(match p { Pick::Hover(h) => StackMsg::Hover(card(h)), Pick::Press(h) => StackMsg::Press(card(h)) })))
         .on_key(move |k, _| matches!(k, Key::Up | Key::Down | Key::Left | Key::Right | Key::Enter | Key::Char(' ') | Key::Escape).then(|| b(StackMsg::Key(k))));
-    // Marks: the material draws the cards as its marks at rest too (held loose, like a picture).
-    if let StackLook::Marks(m) = s.look { e = e.material(m.id()).loose(1.0).legible(false); }
+    // Marks: the material draws the cards as `plain` does at rest, as its marks while they fan and settle.
+    if let StackLook::Marks(m) = s.look { e = e.material(m.id()).loose(s.looseness()).legible(false); }
     // The cards swing inside one 3D element: a point at each card's far corner (where it is in the
     // view, as the straight-on camera shows it) stirs the field map as the card turns (DESIGN.md
     // §1.29). The stack is a stirring element itself, so its cards do not read their own trail.

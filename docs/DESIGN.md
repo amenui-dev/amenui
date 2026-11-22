@@ -2498,11 +2498,14 @@ Hovering or pressing a card (a 3D element's `Pick`) turns the n-th card beneath 
 arrow keys change card. The cards are one `scene3d` (a cube each), so their look follows the material
 (`StackLook::of`): under `plain` they are flat cards seen face on (an orthographic camera); under `smudgr` and the
 like they have thickness, seen from above at an angle, outlined, in two tones, with visible edges; under `dottr`,
-`charr` and `halftonr` they are flat cards handed to the mark material and held at looseness 1, so they are marks
-even at rest. The formula caption under the page prints this moment's `angle(n)` and `delay(n)`. Acceptance: unit
+`charr` and `halftonr` they are flat cards handed to the mark material; at rest they are drawn as in `plain`, and they
+loosen to 1 only while the cards fan and settle (toward 1 within `LOOSEN_S` = 120 ms while any card's spring moves,
+back to 0 within `TIGHTEN_S` = 240 ms after the last one stops, then no frames; a fan held open and still is at 0). The formula caption under the page prints this moment's `angle(n)` and `delay(n)`. Acceptance: unit
 tests in `card_stack.rs` (the formula, the order of delays, holding, Esc, the look by material); `tests/stack.rs`
 (the pointer picks the top card, at 40 ms cards 1 and 2 have started and card 3 hasn't, after stopping each card
-equals the formula, no frames at rest, closing on leave). Samples `craft <dir> stack`: one row per look.
+equals the formula, no frames at rest, closing on leave); `tests/card_stack.rs` (marked cards' pixels are plain's
+at rest and from 240 ms after the springs stop; from 120 ms after the fan starts a quarter of their inside
+differs, under `halftonr` 15%, whose dots at full ink meet, with some in every window of 3 × 3 cells). Samples `craft <dir> stack`: one row per look.
 
 ### 1.25 A dot chart
 

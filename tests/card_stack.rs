@@ -94,3 +94,111 @@ fn a_turned_cards_outline_is_a_smooth_line() {
         assert!(slope < -0.5 && off < 0.45, "{}: the edge is a straight line: slope {slope}, {off} px off it at most", th.name);
     }
 }
+
+/// Cards handed to a mark material (DESIGN.md §1.24): at rest the cards' pixels are those `plain` draws and
+/// nothing asks for frames; from `LOOSEN_S` after the fan starts they are marks (a quarter of the cards'
+/// inside differs from `plain` at least, under halftonr 15% and some in every window of 3 x 3 cells), and from `TIGHTEN_S` after the last spring stops they are drawn as
+/// in `plain` again, and no frames are asked for.
+#[test]
+fn marked_cards_are_plain_at_rest_and_marks_only_while_they_fan() {
+    use amenui::widgets::{LOOSEN_S, StackLook, TIGHTEN_S};
+    #[derive(Clone)]
+    struct M { deck: Stack, light: bool, mat: Material }
+    fn view(s: &M) -> El<()> { col().key("page").width(W as f32).height(H as f32).pad(20.0, 20.0).child(card_stack("cs", &s.deck, 320.0, 200.0, |_| ())) }
+    fn open(mat: Material, light: bool, scale: f32) -> Ui<M, ()> {
+        let mut deck = Stack::default();
+        deck.look = if mat == Material::Plain { StackLook::Plain } else { StackLook::Marks(mat) };
+        let (w, h) = ((W as f32 * scale) as u32, (H as f32 * scale) as u32);
+        let mut u = Ui::new(M { deck, light, mat }, view, |_, _| {}, fonts(), w, h, scale)
+            .on_look(|s| Look { material: s.mat, theme: if s.light { LIGHT } else { DARK }, ..Look::default() })
+            .on_tick(|s, t| s.deck.step(t)).on_wake(|s, t| s.deck.moving().then_some(t));
+        u.pointer_leave();
+        u
+    }
+    fn shot(o: &mut Offscreen, u: &mut Ui<M, ()>, t: f32) -> Vec<u8> { u.tick(t); u.settle(); let l = u.look(); let f = o.render(u, &l); u.frame_drawn(); f }
+    for scale in [1.0f32, 2.0] {
+        let (w, h) = ((W as f32 * scale) as u32, (H as f32 * scale) as u32);
+        let (Ok(mut o), Ok(mut p)) = (Offscreen::try_new(w, h), Offscreen::try_new(w, h)) else { eprintln!("no GPU adapter here: skipped"); return };
+        o.r.partial = false;
+        p.r.partial = false;
+        for light in [false, true] {
+            let th = if light { LIGHT } else { DARK };
+            let g = th.ground.map(|v| (v * 255.0).round() as u8);
+            for mat in [Material::Dottr, Material::Charr, Material::Halftonr] {
+                let (mut u, mut v) = (open(mat, light, scale), open(Material::Plain, light, scale));
+                let name = format!("{} {mat:?} at {scale}x", th.name);
+                // The cards' pixels: what `plain` draws other than the ground; their inside, 3 px from it.
+                let cards = |f: &[u8]| -> Vec<bool> { f.chunks_exact(4).map(|q| q[..3].iter().zip(&g).any(|(a, b)| a.abs_diff(*b) > 1)).collect() };
+                let inside = |c: &[bool]| -> Vec<usize> {
+                    let (w, h) = (w as i32, h as i32);
+                    (0..c.len()).filter(|&i| { let (x, y) = ((i as i32) % w, (i as i32) / w); (-3..=3).all(|d: i32| [(x + d, y), (x, y + d)].iter().all(|&(a, b)| a >= 0 && b >= 0 && a < w && b < h && c[(b * w + a) as usize])) }).collect()
+                };
+                let same_on = |a: &[u8], b: &[u8], c: &[bool]| c.iter().enumerate().filter(|(i, k)| **k && a[i * 4..i * 4 + 3] != b[i * 4..i * 4 + 3]).count();
+                // At rest.
+                let (a0, b0) = (shot(&mut o, &mut u, 1.5), shot(&mut p, &mut v, 1.5));
+                let c0 = cards(&b0);
+                assert!(c0.iter().filter(|k| **k).count() > 4000, "{name}: the cards are drawn");
+                assert_eq!(same_on(&a0, &b0, &c0), 0, "{name}: at rest the cards' pixels are plain's");
+                let a1 = shot(&mut o, &mut u, 4.0);
+                assert!(a0 == a1, "{name}: at rest 1.5 s and 4 s are the same frame");
+                assert!(!u.needs_frame(4.1), "{name}: at rest no frames");
+                // Fanned (held under the top card), frame by frame.
+                let t0 = 5.0;
+                for ui in [&mut u, &mut v] { ui.tick(t0); ui.state.deck.update(StackMsg::Press(Some(0)), t0); ui.relayout(); }
+                let mut t = t0;
+                let mut stopped = None;
+                let mut marked = 0;
+                let mut least = 1.0f32;
+                while t < t0 + 4.0 {
+                    t += 1.0 / 60.0;
+                    let (a, b) = (shot(&mut o, &mut u, t), shot(&mut p, &mut v, t));
+                    let l = u.state.deck.looseness();
+                    // The springs stopped where the looseness began to fall from 1.
+                    if stopped.is_none() && l < 1.0 && t > t0 + LOOSEN_S + 0.02 { stopped = Some(t - (1.0 - l) * TIGHTEN_S); }
+                    if t >= t0 + LOOSEN_S + 1e-3 && stopped.is_none() {
+                        let ins = inside(&cards(&b));
+                        let diff = ins.iter().filter(|&&i| a[i * 4..i * 4 + 3] != b[i * 4..i * 4 + 3]).count();
+                        least = least.min(diff as f32 / ins.len() as f32);
+                        marked += 1;
+                        // Halftonr: the screen is over the whole card, not only a part of it: every window of
+                        // 3 x 3 cells (its pitch at looseness 1) wholly inside the cards has pixels that differ.
+                        if mat == Material::Halftonr && marked == 6 {
+                            let k = (3.0 * 7.0 * 1.5 * scale).ceil() as usize;
+                            let (w, h) = (w as usize, h as usize);
+                            let mut is_in = vec![false; w * h];
+                            for &i in &ins { is_in[i] = true; }
+                            // Summed areas of the inside and of the pixels that differ from plain.
+                            let sums = |f: &dyn Fn(usize) -> bool| {
+                                let mut s = vec![0u32; (w + 1) * (h + 1)];
+                                for y in 0..h { for x in 0..w { s[(y + 1) * (w + 1) + x + 1] = f(y * w + x) as u32 + s[y * (w + 1) + x + 1] + s[(y + 1) * (w + 1) + x] - s[y * (w + 1) + x]; } }
+                                s
+                            };
+                            let si = sums(&|i| is_in[i]);
+                            let sd = sums(&|i| is_in[i] && a[i * 4..i * 4 + 3] != b[i * 4..i * 4 + 3]);
+                            let box_sum = |s: &[u32], x: usize, y: usize| s[(y + k) * (w + 1) + x + k] + s[y * (w + 1) + x] - s[y * (w + 1) + x + k] - s[(y + k) * (w + 1) + x];
+                            let mut windows = 0;
+                            for y in 0..h.saturating_sub(k) { for x in 0..w.saturating_sub(k) {
+                                if box_sum(&si, x, y) as usize != k * k { continue; }
+                                windows += 1;
+                                assert!(box_sum(&sd, x, y) > 0, "{name} at {:.0} ms: the {k} px window at {x}, {y} inside the cards is plain's", (t - t0) * 1000.0);
+                            } }
+                            assert!(windows > 100, "{name}: {windows} windows of 3 x 3 cells inside the cards");
+                        }
+                    }
+                    if let Some(s) = stopped && t >= s + TIGHTEN_S + 1e-3 {
+                        let c = cards(&b);
+                        assert_eq!(same_on(&a, &b, &c), 0, "{name} at {:.0} ms after the springs stopped: the cards' pixels are plain's", (t - s) * 1000.0);
+                        assert!(!u.needs_frame(t + 0.1), "{name}: settled and tight: no frames");
+                        break;
+                    }
+                }
+                eprintln!("{name}: {:.1}% of the cards' inside differs from plain at the least, in {marked} frames", least * 100.0);
+                // Halftonr's dots at full ink meet, so a card's inside differs only between them: 15% at the
+                // least (measured 19-28%), and every window of 3 x 3 cells has some (above).
+                let floor = if mat == Material::Halftonr { 0.15 } else { 0.25 };
+                assert!(least >= floor, "{name}: {:.1}% of the cards' inside differs from plain at the least", least * 100.0);
+                assert!(marked >= 10 && stopped.is_some(), "{name}: {marked} frames of marks, the springs stopped at {stopped:?}");
+            }
+        }
+    }
+}

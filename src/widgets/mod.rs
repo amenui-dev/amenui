@@ -65,7 +65,7 @@ pub use toggle::{toggle, toggle_group};
 pub use tooltip::tooltip;
 pub use caption::{CaptionParam, caption};
 pub use card::card;
-pub use card_stack::{Stack, StackLook, StackMsg, card_stack};
+pub use card_stack::{LOOSEN_S, Stack, StackLook, StackMsg, TIGHTEN_S, card_stack};
 pub use choice::{choice, segmented};
 pub use dialog::dialog;
 pub use divider::{divider, vdivider};

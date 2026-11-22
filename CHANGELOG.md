@@ -8,6 +8,12 @@ crate and the `amenui` npm package (`web/`) always carry the same version, becau
 match the module that `web_app!` generates. The minimum Rust is the one CI builds with (`rust-version`
 in Cargo.toml); raising it is a breaking change before 1.0 only in the second number.
 
+## Marks only while the cards move
+
+- A card stack under `dottr`, `charr` and `halftonr` is drawn as under `plain` at rest: its cards loosen to 1 within
+  120 ms while a card's spring moves (`LOOSEN_S`) and back to 0 within 240 ms after the last one stops (`TIGHTEN_S`),
+  and then ask for no frames. They had been held at looseness 1. `Stack::moving` is true until they are tight.
+
 ## Faster scrolling, no late stalls
 
 - The reduced grid (stages at their own scale, a quality below 1) is fixed to the content of the largest scroll area,
