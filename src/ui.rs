@@ -860,6 +860,11 @@ pub struct Ui<S, M> {
     /// Painting because something scrolled: what comes into view has been there all along (it does
     /// not condense as if it were new).
     scroll_paint: bool,
+    /// What asked for the layout or paint left for the frame (`Ui::settle`): a scroll, and anything else.
+    stale_scroll: (bool, bool),
+    /// In a paint that answers a scroll and something else at once, the nodes (their keys' hashes) of the
+    /// layout before: what they draw came into view by scrolling and does not condense; a new key does.
+    scroll_known: Option<HashSet<u64>>,
     /// When the pointer event being handled happened (the host's timestamp), if it says: a finger's
     /// speed is measured by these, not by when the events were handled.
     event_t: Option<f32>,
@@ -1251,7 +1256,7 @@ impl<S, M: Clone> Ui<S, M> {
             perf: crate::perf::Perf { quality: 1.0, ..Default::default() }, span: 0, painting: false, overlay: 0, overlay_at: 0.0, overlay_box: None, overlay_w: (0, (0.0, 0.0), 0.0), fade_s: REDUCED_FADE, came: vec![], arriving: HashMap::default(), sweeping: false, swept_nodes: vec![], remeasure: false, plate_slots: Default::default(), plate_sig: Default::default(), plate_keep: Default::default(), faces_added: 0, plate_clear: vec![], plate_over: vec![], pclock: 0.0, plate_frame: f32::NEG_INFINITY, assets: HashMap::default(), assets_asked: Default::default(), shape_seen: 0.0, hud_idle: false, rebuilt: 0,
             text_capture: None, sel: None, sel_drag: false, clicks: (f32::NEG_INFINITY, 0.0, 0.0, 0), a11y_sent: HashMap::default(), a11y_focus: None, layout_gen: 0, a11y_gen: u64::MAX, a11y_owed: false,
             tree: TaffyTree::new(), tids: HashMap::default(), mkeys: HashMap::default(), moved: HashMap::default(), virt_views: HashMap::default(), virt_made: HashMap::default(), stack_w: HashMap::default(),
-            scrolling: Scrolling::default(), touch: None, touches: HashSet::default(), touching: false, fling: None, over: HashMap::default(), motion: HashMap::default(), scroll_paint: false, event_t: None, ev: 0.0,
+            scrolling: Scrolling::default(), touch: None, touches: HashSet::default(), touching: false, fling: None, over: HashMap::default(), motion: HashMap::default(), scroll_paint: false, stale_scroll: (false, false), scroll_known: None, event_t: None, ev: 0.0,
             recs: HashMap::default(), recomps: HashMap::default(), slides: HashMap::default(), no_recompose: false,
             meshes: crate::mesh::Library::default(), mesh_hover: None, glyphs: Default::default(), text_scratch: TextScratch::default(), prep: Default::default(), move_over: None, particle_gpu: false, motes: vec![], shed_at: HashMap::default(), shed_owed: HashMap::default(), field_marks: HashMap::default(), seen: HashMap::default(), outlines: HashMap::default(), pens_told: HashMap::default(), pens_found: vec![], decodes: HashMap::default(), decode_last: HashMap::default(), last_morph: None, left: Default::default(), queued: vec![], flushing: false, coalesce: false, defer: 0, stale_layout: false, stale_from: None, wheel_latch: None, laid: (0, None), stale_paint: false, fill_state: None, motes_made: 0,
             fmap: crate::fieldmap::FieldMap::default(), stirr_at: HashMap::default(), fmap_size: (0.0, 0.0), fmap_ink: u64::MAX, fmap_inks: HashMap::default(), strand_faded: HashMap::default(), strand_cache: HashMap::default(), strand_hold: HashMap::default(), strand_drawn: vec![], trace_drawn: vec![], leaders: vec![], echoes: HashMap::default(), echo_at: f32::NEG_INFINITY, frozen: None, trace_head: HashMap::default(),
@@ -3207,7 +3212,15 @@ impl<S, M: Clone> Ui<S, M> {
         // A fill that answers the pointer is painted again when what it answers changes.
         if self.fill_state.is_some() && self.under_now() != self.fill_state { self.stale_paint = true; }
         if !self.stale() { return; }
+        // Left by scrolls alone, it paints as a scroll does: what came into view does not condense. Left by
+        // a scroll and something else (a new page, rows added), what was in the layout before does not.
+        let (scrolled, other) = std::mem::take(&mut self.stale_scroll);
+        let was = self.scroll_paint;
+        self.scroll_paint |= scrolled && !other;
+        if scrolled && other { self.scroll_known = Some(self.nodes.iter().map(|n| key_hash(&n.key)).collect()); }
         if self.stale_layout { self.relayout(); } else if !self.stale_stages.is_empty() { let k = std::mem::take(&mut self.stale_stages); self.restage(k); } else if self.stale_paint { self.paint(); }
+        self.scroll_paint = was;
+        self.scroll_known = None;
         // The input this paint answered is spent (for the stages: `tick` leaves it while the paint waits).
         self.stage_input = (false, false);
     }
@@ -3216,6 +3229,8 @@ impl<S, M: Clone> Ui<S, M> {
         if self.nodes.iter().all(|n| n.fill_on.none()) { return None; }
         Some((self.hover.clone(), self.capture.as_ref().map(|c| c.key.clone()).or_else(|| self.pressed.clone()), self.focus.clone()))
     }
+    /// A layout or paint was left for the frame: note whether a scroll asked for it.
+    fn stale_by(&mut self) { if self.scroll_paint { self.stale_scroll.0 = true } else { self.stale_scroll.1 = true } }
     /// Laying out or painting waits for the frame (`Ui::settle`).
     fn stale(&self) -> bool { self.stale_layout || self.stale_paint || !self.stale_stages.is_empty() }
     /// Lay out once per frame what pointer moves, wheels and ticks change, before the frame is drawn
@@ -3235,7 +3250,7 @@ impl<S, M: Clone> Ui<S, M> {
     #[track_caller]
     pub fn relayout(&mut self) {
         let here = std::panic::Location::caller();
-        if self.defer > 0 { self.stale_from.get_or_insert(here); self.stale_layout = true; self.dirty = true; return; }
+        if self.defer > 0 { self.stale_from.get_or_insert(here); self.stale_layout = true; self.dirty = true; self.stale_by(); return; }
         let from = self.stale_from.take().unwrap_or(here);
         self.laid = (self.laid.0 + 1, self.laid.1.or(Some(from)));
         self.stale_layout = false;
@@ -3921,7 +3936,7 @@ impl<S, M: Clone> Ui<S, M> {
 
     /// Nodes → instances. Identity is key + part (+ glyph id), so unchanged things keep their birth time.
     fn paint(&mut self) {
-        if self.defer > 0 { self.stale_paint = true; self.dirty = true; return; }
+        if self.defer > 0 { self.stale_paint = true; self.dirty = true; self.stale_by(); return; }
         self.stale_paint = false;
         self.show_clear();
         self.sweeping = false;
@@ -4209,7 +4224,8 @@ impl<S, M: Clone> Ui<S, M> {
             let mat = n.mat;
             let dim = if n.disabled { 0.4 } else { 1.0 } * fade;
             let mut sink = Sink { scene: &mut self.scene, owners: &mut self.owners, tags: &mut self.tags, unseen: &mut self.unseen, counters: &mut counters, latest: &mut latest, loose: &mut any_loose };
-            let nk = { use std::hash::{Hash, Hasher}; let mut h = crate::fasthash::FastHasher::new(); n.key.hash(&mut h); h.finish() };
+            let nk = key_hash(&n.key);
+            let known = self.scroll_paint || self.scroll_known.as_ref().is_some_and(|k| k.contains(&nk));
             let text_born = self.text_births.get(&nk).copied();
             // A drawing's marks, and ink on a plate (`El::plate`: what is drawn is there at once).
             let drawn = matches!(n.content, Content::Canvas(_)) || plate.is_some();
@@ -4238,7 +4254,7 @@ impl<S, M: Clone> Ui<S, M> {
                 // What a morph shows has been there all along: it must not condense on top of its ramp.
                 // A drawing's marks change every frame: they are there at once, never condensing.
                 let born = if role != 0 || drawn || self.timing.off.close { *births.entry(id).or_insert(-1e4) }
-                           else { *births.entry(id).or_insert_with(|| self.births.get(&id).copied().or(if glyph.is_some() { text_born } else { None }).unwrap_or(if self.scroll_paint { -1e4 } else { now })) };
+                           else { *births.entry(id).or_insert_with(|| self.births.get(&id).copied().or(if glyph.is_some() { text_born } else { None }).unwrap_or(if known { -1e4 } else { now })) };
                 if glyph.is_some() { let e = text_births.entry(nk).or_insert(born); *e = e.min(born); }
                 inst.extra[3] = born;
                 *sink.latest = sink.latest.max(born);
@@ -4664,6 +4680,7 @@ impl<S, M: Clone> Ui<S, M> {
     fn restage(&mut self, keys: Vec<String>) {
         if self.defer > 0 {
             for k in keys { if !self.stale_stages.contains(&k) { self.stale_stages.push(k); } }
+            self.stale_by();
             self.dirty = true;
             return;
         }
@@ -7440,6 +7457,8 @@ fn within<M>(nodes: &[Node<M>], mut i: usize, root: usize) -> bool {
     }
 }
 
+/// A node key's hash (the text births are kept by it).
+fn key_hash(key: &str) -> u64 { let mut h = DefaultHasher::new(); key.hash(&mut h); h.finish() }
 fn ident(key: &str, part: u32, glyph: u32) -> u64 {
     let mut h = DefaultHasher::new();
     (key, part, glyph).hash(&mut h);

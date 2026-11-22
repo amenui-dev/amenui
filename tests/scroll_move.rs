@@ -326,3 +326,159 @@ fn a_frame_laid_out_names_where_the_layout_was_asked_for() {
     assert_eq!(path.layouts, 0, "{}", path.line());
     assert!(!path.line().contains("layout"), "{}", path.line());
 }
+
+
+// Rows a scroll brings into view were there all along (DESIGN.md §1.8.3), with coalesced input as without
+// (the web and desktop hosts coalesce: the scroll's paint waits for the frame, `Ui::settle`).
+const MATS: [Material; 6] = [Material::Plain, Material::Dottr, Material::Halftonr, Material::Charr, Material::Smudgr, Material::Carvr];
+/// The instances born (condensing) since `t0`.
+fn young<S, M: Clone>(u: &Ui<S, M>, t0: f32) -> usize { u.scene().instances.iter().filter(|i| i.extra[3] > t0 - 1e-3).count() }
+/// Ten thousand rows, built as they come into view.
+fn rows_10k(_: &S) -> El<()> {
+    col().key("page").fill_width().fill_height()
+        .child(col().key("list").fill_width().grow(1.0).scroll().virtual_rows(10_000, 24.0, 4, None, |i| text(format!("Row {i} of ten thousand"), 14.0, Paint::TEXT).key(format!("v{i}"))))
+}
+
+#[test]
+fn rows_a_scroll_brings_into_view_never_condense() {
+    for big in [false, true] {
+        for mat in MATS {
+            for coalesce in [false, true] {
+                // One device px a frame, 800 px/s and 3000 px/s, 60 frames each.
+                for step in [1.0f32, 800.0 / 60.0, 50.0] {
+                    let mut u = if big { Ui::new(S { mat }, rows_10k, |_, _| {}, fonts(), W, H, 1.0).on_look(|s| Look { material: s.mat, ..Look::default() }) } else { open(mat, 1.0) };
+                    u.pointer_leave();
+                    u.tick(5.0);
+                    u.coalesce(coalesce);
+                    let mut t = 10.0;
+                    u.tick(t);
+                    u.settle();
+                    let t0 = t;
+                    for f in 0..60 {
+                        t += 1.0 / 60.0;
+                        u.tick(t);
+                        u.wheel(240.0, 200.0, step);
+                        u.settle();
+                        assert_eq!(young(&u, t0), 0, "{mat:?}, coalesced {coalesce}, {step} px a frame, {}: frame {f} has instances condensing", if big { "10,000 rows" } else { "60 rows" });
+                    }
+                    assert!(u.scroll_offset("list") > 50.0);
+                }
+            }
+        }
+    }
+}
+
+struct Grow { added: bool }
+/// Whether the state's tick adds the rows.
+static ADD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 60 rows; three more, new keys, in the middle once the state's tick adds them (`ADD`).
+fn growing(s: &Grow) -> El<()> {
+    let mut c = col().key("rows").gap(6.0).pad(12.0, 12.0);
+    for i in 0..60 {
+        if i == 14 && s.added { for k in 0..3 { c = c.child(text(format!("Added {k}"), 14.0, Paint::TEXT).key(format!("added{k}"))); } }
+        c = c.child(text(format!("Row {i}: a line of text to read as it scrolls past"), 14.0, Paint::TEXT).key(format!("row{i}")));
+    }
+    col().key("page").fill_width().fill_height().child(col().key("list").fill_width().grow(1.0).scroll().child(c))
+}
+
+#[test]
+fn rows_added_while_a_scroll_goes_on_condense_and_nothing_else_does() {
+    // The rows come in the same frame as a scroll step, coalesced: one paint answers both, and what was in
+    // the layout before (scrolled into view or not) does not condense; the three new keys do.
+    for coalesce in [false, true] {
+        let mut u = Ui::new(Grow { added: false }, growing, |_, _| {}, fonts(), W, H, 1.0)
+            .on_tick(|s, _| { let add = ADD.load(std::sync::atomic::Ordering::Relaxed) && !s.added; if add { s.added = true; } add });
+        ADD.store(false, std::sync::atomic::Ordering::Relaxed);
+        u.pointer_leave();
+        u.tick(5.0);
+        u.coalesce(coalesce);
+        let mut t = 10.0;
+        u.tick(t);
+        u.settle();
+        let t0 = t;
+        // 100 px a frame: every step brings rows into view that were never drawn, the step the rows are
+        // added in too.
+        for f in 0..5 {
+            t += 1.0 / 60.0;
+            if f == 2 { ADD.store(true, std::sync::atomic::Ordering::Relaxed); }
+            u.tick(t);
+            u.wheel(240.0, 200.0, 100.0);
+            u.settle();
+            let key = |k: usize| u.nodes()[k].key.as_str();
+            let young: Vec<&str> = u.scene().instances.iter().zip(u.owners()).filter(|(i, _)| i.extra[3] > t0).map(|(_, o)| key(o.0)).collect();
+            assert!(young.iter().all(|k| k.starts_with("added")), "coalesced {coalesce}, frame {f}: condensing {young:?}");
+            if f == 2 { for k in 0..3 { assert!(young.contains(&format!("added{k}").as_str()), "coalesced {coalesce}: added{k} does not condense: {young:?}"); } }
+        }
+    }
+}
+
+#[test]
+fn a_scroll_that_stops_wants_no_frames_from_settle_ms_on() {
+    for coalesce in [false, true] {
+        let mut u = open(Material::Dottr, 1.0);
+        u.coalesce(coalesce);
+        let look = u.look();
+        let mut t = 10.0;
+        for _ in 0..30 { t += 1.0 / 60.0; u.tick(t); u.wheel(240.0, 200.0, 50.0); u.settle(); u.frame_drawn(); }
+        // Frames until it has settled, as a host draws them.
+        let stop = t;
+        while t < stop + look.scroll.settle_ms / 1000.0 { t += 1.0 / 60.0; u.tick(t); u.settle(); u.frame_drawn(); }
+        for k in 0..30 {
+            let now = t + k as f32 / 60.0;
+            assert!(!u.needs_frame(now) && u.next_wake(now).is_none(), "coalesced {coalesce}: a frame is wanted {:.0} ms after the scroll stopped", (now - stop) * 1000.0);
+        }
+    }
+}
+
+#[test]
+fn rows_a_coalesced_scroll_brings_into_view_were_there_all_along() {
+    // The web and desktop hosts coalesce input: the scroll's paint waits for the frame (`Ui::settle`), and
+    // is still a scroll's, so what comes into view does not condense as if it were new.
+    for coalesce in [false, true] {
+        let mut u = open(Material::Plain, 1.0);
+        u.coalesce(coalesce);
+        let t = 10.0;
+        u.tick(t);
+        let before = u.scene().instances.len();
+        u.wheel(240.0, 200.0, 400.0);
+        u.settle();
+        let young = u.scene().instances.iter().filter(|i| i.extra[3] > t - 1.0).count();
+        assert!(u.scroll_offset("list") > 0.0 && !u.scene().instances.is_empty() && before > 0);
+        assert_eq!(young, 0, "coalesced {coalesce}: {young} instances scrolled into view condense");
+    }
+}
+
+#[test]
+fn coalesced_or_not_a_scroll_draws_the_same_frames_and_a_slow_one_moves_by_whole_pixels() {
+    let Ok(_) = Offscreen::try_new(64, 64) else { eprintln!("no GPU adapter here: skipped"); return };
+    for mat in MATS {
+        // One device px a frame and 800 px/s.
+        for (step, frames) in [(1.0f32, 10), (800.0 / 60.0, 6)] {
+            let (mut ra, mut rb) = (Offscreen::new(W, H), Offscreen::new(W, H));
+            let (mut a, mut b) = (open(mat, 1.0), open(mat, 1.0));
+            b.coalesce(true);
+            let look = a.look();
+            let mut t = 10.0;
+            let mut last: Option<Vec<u8>> = None;
+            for f in 0..frames {
+                t += 1.0 / 60.0;
+                for u in [&mut a, &mut b] { u.tick(t); u.wheel(240.0, 200.0, step); u.tick(t); }
+                let (fa, fb) = (ra.render(&mut a, &look), rb.render(&mut b, &look));
+                let differ = fa.chunks(4).zip(fb.chunks(4)).filter(|(x, y)| x != y).count();
+                assert_eq!(differ, 0, "{mat:?}, {step} px a frame, frame {f}: {differ} pixels differ with coalesced input");
+                // `check` item 18, coalesced: the scroll area but 24 px at its edges is the last frame moved
+                // up a pixel; control: unmoved, it is not.
+                if step == 1.0 && let Some(p) = &last {
+                    let r = b.node("list").expect("list").rect;
+                    let (x0, x1, y0, y1) = (r.x as u32 + 24, (r.x + r.w) as u32 - 24, r.y as u32 + 24, (r.y + r.h) as u32 - 24);
+                    let px = |v: &[u8], x: u32, y: u32| { let i = ((y * W + x) * 4) as usize; [v[i], v[i + 1], v[i + 2]] };
+                    let (mut moved, mut still) = (0, 0);
+                    for y in y0..y1 { for x in x0..x1 { moved += (px(&fb, x, y) != px(p, x, y + 1)) as u32; still += (px(&fb, x, y) != px(p, x, y)) as u32; } }
+                    assert_eq!(moved, 0, "{mat:?}, frame {f}: {moved} pixels of the scroll area are not the last frame moved up a pixel");
+                    assert!(still > 0, "{mat:?}, frame {f}: the control (unmoved) matches");
+                }
+                last = Some(fb);
+            }
+        }
+    }
+}

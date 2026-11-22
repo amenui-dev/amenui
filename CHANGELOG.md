@@ -10,6 +10,11 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Faster scrolling, no late stalls
 
+- With coalesced input (the web and desktop hosts), what a scroll brings into view no longer condenses as if it were new:
+  the paint left for the frame is a scroll's when only scrolls asked for it, and when a scroll and something else
+  (rows added, a new page) asked for it, what was in the layout before does not condense and new keys do. A fast
+  scroll had condensed most of the screen every frame.
+
 - A wheel gesture stays with what took its first step (`WHEEL_LATCH` = 0.5 s between steps, the pointer still):
   a 3D view (`El::on_wheel`, `widgets::orbit`) scrolled under the pointer no longer takes over a page's scroll
   momentum, which stopped the page and laid it out again every frame. An `on_wheel` handler that returns `None`

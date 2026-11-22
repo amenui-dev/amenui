@@ -1060,7 +1060,10 @@ list page has number controls):
 - **At rest and slow** (below `calm_speed`, 600 px/s by default): scrolling is a picture moved by whole
   device pixels. When placing, the runtime rounds the offset to device pixels (the stored offset stays
   fractional, so the fling integral loses nothing); instances that appear because of scrolling (`paint` in
-  `Ui::scrolled`) don't condense, since they were there all along; local and atlas coordinates in the
+  `Ui::scrolled`) don't condense, since they were there all along, also when coalesced input leaves that paint for
+  the frame (`Ui::settle` paints as a scroll does when only scrolls asked for it, and by key when a scroll and something else
+  did: what was in the layout before does not condense, a new key does; it had painted them as new, and a
+  fast scroll on the web condensed most of the screen, about 80% of /components/ in stage 1 every frame); local and atlas coordinates in the
   G-buffer stage are computed in the fragment from the pixel position minus the flat box origin (`exact_i`),
   not interpolated; a background without a gradient is not computed from y. Inside a scrolling node, the
   material's cells, hashes and noise use content coordinates (`anc`: the sum of the offsets of the scrolling
