@@ -482,3 +482,50 @@ fn coalesced_or_not_a_scroll_draws_the_same_frames_and_a_slow_one_moves_by_whole
         }
     }
 }
+
+/// A small scroll area inside the list that does not scroll itself (a strip of chips in a card, as the
+/// components index has): it is content the frame carries, so the trace's hold still moves the last
+/// frame (it drew every such frame whole, "latch: not alone"), and each frame is the frame drawn whole.
+#[test]
+fn a_still_scroll_area_inside_the_list_does_not_stop_the_hold_moving_the_frame() {
+    struct N { ground: Material }
+    fn nested(_: &N) -> El<()> {
+        let rows = (0..60).fold(col().key("rows").gap(6.0).pad(12.0, 12.0), |c, i| {
+            let r = row().key(format!("row{i}")).gap(10.0).child(space(14.0, 14.0).radius(3.0).fill(if i % 3 == 0 { Paint::ACCENT } else { Paint::DIM }))
+                .child(text(format!("Row {i}: a line of text to read as it scrolls past"), 14.0, Paint::TEXT));
+            if i % 12 == 6 {
+                let strip = (0..12).fold(row().key(format!("strip{i}/rows")).gap(8.0), |s, k| s.child(text(format!("chip {k}"), 13.0, Paint::TEXT).key(format!("chip{i}/{k}"))));
+                c.child(r).child(row().key(format!("strip{i}")).width(220.0).height(24.0).scroll_x().child(strip))
+            } else { c.child(r) }
+        });
+        col().key("page").fill_width().fill_height().child(col().key("list").fill_width().grow(1.0).scroll().child(rows))
+    }
+    let Ok(mut part) = Offscreen::try_new(W, H) else { eprintln!("no GPU adapter here: skipped"); return };
+    let Ok(mut whole) = Offscreen::try_new(W, H) else { return };
+    whole.r.partial = false;
+    for ground in [Material::Dottr, Material::Charr] {
+        let mk = || { let mut u = Ui::new(N { ground }, nested, |_, _| {}, fonts(), W, H, 1.0).on_look(|s| Look { material: s.ground, ..Look::default() }); u.pointer_leave(); u.tick(5.0); u };
+        let (mut u, mut v) = (mk(), mk());
+        let look = u.look();
+        let _ = part.render(&mut u, &look);
+        let _ = whole.render(&mut v, &look);
+        let mut t = 5.0;
+        let (mut held, mut alone) = (0, 0);
+        for f in 0..40 {
+            t += 1.0 / 60.0;
+            let dy = if f < 14 { 6.0 + 4.0 * f as f32 } else { 0.0 };
+            for ui in [&mut u, &mut v] { if dy != 0.0 { ui.wheel(240.0, 200.0, dy); } ui.tick(t); }
+            let a = part.render(&mut u, &look);
+            let b = whole.render(&mut v, &look);
+            let diff = a.iter().zip(&b).filter(|(p, q)| p != q).count();
+            let path = u.perf().path;
+            assert_eq!(diff, 0, "{ground:?}, frame {f}: {diff} bytes differ from the frame drawn whole ({})", path.line());
+            if path.why == "latch: not alone" { alone += 1; }
+            let k = u.field().scrollo.iter().map(|o| o[2]).fold(0.0, f32::max);
+            if k > 0.02 && path.moved && part.r.cost.moved > 0 { held += 1; }
+        }
+        assert!(u.field().scrolls.iter().filter(|r| r[2] > r[0]).count() >= 2, "{ground:?}: no strip came into view");
+        assert_eq!(alone, 0, "{ground:?}: {alone} frames were drawn whole for the strip");
+        assert!(held >= 6, "{ground:?}: only {held} frames with the rows held moved the last frame");
+    }
+}

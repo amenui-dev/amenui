@@ -221,7 +221,15 @@ fn scroll_move(prev: &Inputs, cur: &Inputs, mats: &[Material], s: f32) -> (Optio
         }
         let pitches: Vec<f32> = vm.iter().filter_map(|m| latch_pitch(*m, &cur.look, s)).collect();
         if pitches.is_empty() { return plain; }
-        let alone = (0..8).all(|i| i == j || is_empty(meet(cur.field.scrolls[i], r)));
+        // Another scroll area over this one holds its own rows; one inside it that does not scroll
+        // itself is content the frame carries, and what it draws is shaded again where it was and where
+        // it is (as a scroll area that moved, below).
+        let carried = |i: usize| {
+            let (q, p) = (cur.field.scrolls[i], prev.field.scrolls[i]);
+            let inside = |b: Bx| b[0] >= r[0] && b[1] >= r[1] && b[2] <= r[2] && b[3] <= r[3];
+            inside(q) && (is_empty(p) || inside(p)) && prev.field.scrollo[i] == cur.field.scrollo[i] && cur.field.scrollo[i][2] <= 0.0
+        };
+        let alone = (0..8).all(|i| i == j || is_empty(meet(cur.field.scrolls[i], r)) || carried(i));
         if !alone { return no("latch: not alone"); }
         // The frame moves as the ground's material does; what another lattice (or none) holds is shaded
         // again where it is and where the frame took it.

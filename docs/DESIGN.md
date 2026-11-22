@@ -2194,7 +2194,9 @@ copied whole to the target each frame (the web swap chain gives a new image ever
   holds no rows); what lies in the viewport in another material (another lattice, or none: a row in charr or
   plain on a dottr page) is shaded again where it is and where the frame took it, as far as its nearness
   reaches (`scroll_move`'s third value; the components pages, with plain chrome round specimens in their own
-  materials, moved only one frame in two before). This needs the scroll area alone in its viewport, a step of
+  materials, moved only one frame in two before). This needs the scroll area alone in its viewport (a scroll area
+  inside it that does not scroll itself, such as a strip of chips in a card, is content it carries, shaded again
+  where it was and where it is; it had drawn every such frame whole), a step of
   whole device px and no held offset half way between two rows, and the boxes grow by the largest pitch. With a reduced pass for what is loose the frame is drawn whole. With one for the stages alone (§1.35)
   the frame moves and the trace is shaded at full resolution as without it; the reduced grid stays with the
   window, so every stage in the viewport that moved is shaded again where it is (its box among the shade boxes,

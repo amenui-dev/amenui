@@ -10,6 +10,10 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Faster scrolling, no late stalls
 
+- While the trace holds the rows, a scroll area inside the moving one that does not scroll itself no longer makes
+  every frame be drawn whole ("latch: not alone"): it is content the frame carries, shaded again where it was and
+  where it is. On /components/ that was 81 frames in 180 of a fast back-and-forth scroll.
+
 - With coalesced input (the web and desktop hosts), what a scroll brings into view no longer condenses as if it were new:
   the paint left for the frame is a scroll's when only scrolls asked for it, and when a scroll and something else
   (rows added, a new page) asked for it, what was in the layout before does not condense and new keys do. A fast
