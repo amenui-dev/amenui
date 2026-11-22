@@ -10,6 +10,10 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Marks only while the cards move
 
+- The pointer leaving an element whose messages are its own (`El::local_messages`) restages it as a move over it does;
+  the leave had viewed and laid out the whole page. On the Lab's loupe this takes a 10 ms frame each time the pointer
+  leaves the glass down to an ordinary one.
+
 - Under `dottr` and `charr` a thin line at looseness 1 is a row of the least marks instead of falling between the
   cells: a loose cell with ink in it sampled below 0.25 (`INK_FLOOR`) is drawn as if sampled at 0.25 (`dottr` a dot,
   `charr` the lightest character, centred on the line). Cells sampled at 0.25 or more are drawn as before; `halftonr`

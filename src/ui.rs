@@ -2422,8 +2422,10 @@ impl<S, M: Clone> Ui<S, M> {
     fn move_hover(&mut self, at: Option<(f32, f32)>) {
         let now = at.and_then(|(x, y)| self.hit(x, y).and_then(|i| self.up(i, |n| n.on_move.is_some())));
         let key = now.map(|i| self.nodes[i].key.clone());
+        // The element left hears it as it heard the moves: one whose messages are its own is viewed again
+        // alone (`send_at`), not the page.
         if key != self.move_over && let Some(old) = self.move_over.take()
-            && let Some(f) = self.nodes.iter().find(|n| n.key == old).and_then(|n| n.on_move.clone()) && let Some(m) = f(None) { self.send(m); }
+            && let Some(i) = self.nodes.iter().position(|n| n.key == old) && let Some(f) = self.nodes[i].on_move.clone() && let Some(m) = f(None) { self.send_at(Some(i), m); }
         // An element being dragged hears the pointer through its drag alone (`El::on_point` would
         // otherwise hear each move twice, once as a hover, and could not tell a hover from the end).
         let dragged = self.capture.as_ref().is_some_and(|c| key.as_deref() == Some(c.key.as_str()));

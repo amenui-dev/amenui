@@ -361,3 +361,48 @@ fn a_label_recomposing_beside_a_stepping_stage_keeps_the_cheap_redraw() {
     }
     assert!(recomposing > 20, "the label recomposed: {recomposing} frames");
 }
+
+/// A stage whose messages are its own that answers the pointer over it (`El::on_move`; the Lab's
+/// loupe): the moves over it and the pointer leaving it are restaged alike, with no view of the page
+/// and no layout, and what it shows once left is what a whole layout shows.
+mod hovered {
+    use super::*;
+    pub fn stage(at: &Option<(f32, f32)>) -> El<Option<(f32, f32)>> {
+        // The dot is where the pointer is, and faint at the middle when it is not over the glass.
+        let ((x, y), paint) = match *at { Some(p) => (p, Paint::TEXT), None => ((150.0, 100.0), Paint::FAINT) };
+        col().key("glass").stage().local_messages().width(300.0).height(200.0).on_move(Some)
+            .child(col().key("dot").width(8.0).height(8.0).fill(paint).absolute(Some(x - 4.0), Some(y - 4.0), None, None))
+    }
+    pub fn view(at: &Option<(f32, f32)>) -> El<Option<(f32, f32)>> { col().key("page").pad(10.0, 10.0).gap(8.0).child(text("Loupe", 16.0, Paint::TEXT)).child(stage(at)) }
+}
+
+#[test]
+fn a_stage_whose_messages_are_its_own_is_restaged_as_the_pointer_leaves_it() {
+    let mut u = Ui::new(None, hovered::view, |at: &mut Option<(f32, f32)>, m| *at = m, fonts(), 400, 300, 1.0)
+        .on_look(|_| Look { material: Material::Plain, ..Look::default() })
+        .stage_view(|at, k| (k == "glass").then(|| hovered::stage(at)));
+    u.coalesce(true);
+    u.tick(1.0);
+    u.settle();
+    let r = u.node("glass").expect("stage").rect;
+    let mut t = 1.0;
+    // Into the glass, across it, and out below it.
+    let path: Vec<(f32, f32)> = (0..12).map(|f| (r.x + 40.0 + f as f32 * 10.0, r.y + 60.0 + f as f32 * 14.0)).collect();
+    assert!(path.last().is_some_and(|p| p.1 > r.y + r.h), "the path leaves the glass");
+    let c0 = u.perf().counters;
+    for &(x, y) in &path {
+        t += 1.0 / 60.0;
+        u.pointer_move(x, y);
+        u.tick(t);
+        u.settle();
+    }
+    let c1 = u.perf().counters;
+    assert_eq!(u.state, None, "the glass heard the pointer leave");
+    let d = u.node("dot").expect("dot").rect;
+    assert_eq!((d.x - r.x, d.y - r.y), (146.0, 96.0), "and shows it");
+    assert_eq!((c1.views - c0.views, c1.layouts - c0.layouts), (0, 0), "no view of the page and no layout, the leave included: {} views, {} layouts", c1.views - c0.views, c1.layouts - c0.layouts);
+    assert!(c1.restages - c0.restages >= path.len() as u64 - 1, "each frame restaged: {}", c1.restages - c0.restages);
+    let restaged = u.scene().instances.len();
+    u.relayout();
+    assert_eq!(restaged, u.scene().instances.len(), "a whole layout draws what the restage drew");
+}
