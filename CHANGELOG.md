@@ -10,6 +10,10 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Faster scrolling, no late stalls
 
+- While the trace holds the rows, the frame moves as the viewport's ground does: an opaque shape with a material
+  override under the whole viewport (a plain page over a dotted look, as the components pages are) is that ground.
+  Their plain content had been shaded again over the whole viewport every frame as another lattice.
+
 - While the trace holds the rows, a scroll area inside the moving one that does not scroll itself no longer makes
   every frame be drawn whole ("latch: not alone"): it is content the frame carries, shaded again where it was and
   where it is. On /components/ that was 81 frames in 180 of a fast back-and-forth scroll.

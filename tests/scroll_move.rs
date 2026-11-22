@@ -529,3 +529,50 @@ fn a_still_scroll_area_inside_the_list_does_not_stop_the_hold_moving_the_frame()
         assert!(held >= 6, "{ground:?}: only {held} frames with the rows held moved the last frame");
     }
 }
+
+/// A page drawn in plain over a dotted look (the root's opaque ground shape overrides the material, as the
+/// components pages do): the viewport's ground is plain, so while the trace shows the last frame moves with
+/// the content and the plain rows are not shaded again as another lattice (they were, the whole viewport,
+/// every frame); a dotted specimen row still is. Each frame is the frame drawn whole.
+#[test]
+fn a_plain_page_over_a_dotted_look_moves_its_frame_with_the_content() {
+    struct P { specimen: bool }
+    fn page(s: &P) -> El<()> {
+        let rows = (0..60).fold(col().key("rows").gap(6.0).pad(12.0, 12.0), |c, i| {
+            let r = row().key(format!("row{i}")).gap(10.0).child(space(14.0, 14.0).radius(3.0).fill(if i % 3 == 0 { Paint::ACCENT } else { Paint::DIM }))
+                .child(text(format!("Row {i}: a line of text to read as it scrolls past"), 14.0, Paint::TEXT));
+            c.child(if s.specimen && i % 7 == 3 { r.material(Material::Dottr.id()) } else { r })
+        });
+        col().key("page").fill_width().fill_height().fill(Paint::GROUND).material(Material::Plain.id())
+            .child(col().key("list").fill_width().grow(1.0).scroll().child(rows))
+    }
+    let Ok(mut part) = Offscreen::try_new(W, H) else { eprintln!("no GPU adapter here: skipped"); return };
+    let Ok(mut whole) = Offscreen::try_new(W, H) else { return };
+    whole.r.partial = false;
+    for specimen in [false, true] {
+        let mk = || { let mut u = Ui::new(P { specimen }, page, |_, _| {}, fonts(), W, H, 1.0).on_look(|_| Look { material: Material::Dottr, ..Look::default() }); u.pointer_leave(); u.tick(5.0); u };
+        let (mut u, mut v) = (mk(), mk());
+        let look = u.look();
+        let _ = part.render(&mut u, &look);
+        let _ = whole.render(&mut v, &look);
+        let mut t = 5.0;
+        let (mut traced, mut lattice) = (0, 0.0f32);
+        for f in 0..30 {
+            t += 1.0 / 60.0;
+            let dy = if f < 14 { 6.0 + 4.0 * f as f32 } else { 0.0 };
+            for ui in [&mut u, &mut v] { if dy != 0.0 { ui.wheel(240.0, 200.0, dy); } ui.tick(t); }
+            let a = part.render(&mut u, &look);
+            let b = whole.render(&mut v, &look);
+            let diff = a.iter().zip(&b).filter(|(p, q)| p != q).count();
+            let path = u.perf().path;
+            assert_eq!(diff, 0, "specimen {specimen}, frame {f}: {diff} bytes differ from the frame drawn whole ({})", path.line());
+            let k = u.field().scrollo.iter().map(|o| o[2]).fold(0.0, f32::max);
+            if k > 0.02 && path.moved {
+                traced += 1;
+                lattice = lattice.max(path.shade_why.iter().filter(|w| w.0 == "lattice").map(|w| w.1).sum::<f32>());
+            }
+        }
+        assert!(traced >= 6, "specimen {specimen}: only {traced} frames with the trace moved the last frame");
+        if specimen { assert!(lattice > 0.0, "the dotted rows are not shaded again") } else { assert_eq!(lattice, 0.0, "plain rows on a plain page are shaded again as another lattice") }
+    }
+}

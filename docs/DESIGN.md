@@ -2190,8 +2190,10 @@ copied whole to the target each frame (the web swap chain gives a new image ever
   rounded to the pitch, so it moves by how far that rounding stepped (`Move::frame`, maybe 0) while the
   G-buffer moves with the content. In the frame the hold comes on or goes off in (the trace passing the strength
   that holds the rows), one frame shows the content held and the other at its offset, and the frame moves by the
-  difference. The frame moves as the page's own material does (held to its lattice, or with the content when it
-  holds no rows); what lies in the viewport in another material (another lattice, or none: a row in charr or
+  difference. The frame moves as the viewport's ground does (held to its lattice, or with the content when it
+  holds no rows): the page's material, or the override of an opaque shape that lies under the whole viewport in both
+  frames (the components pages draw in plain over the dotted look, so their ground holds no rows; their plain content
+  was shaded again over the whole viewport every frame as another lattice); what lies in the viewport in another material (another lattice, or none: a row in charr or
   plain on a dottr page) is shaded again where it is and where the frame took it, as far as its nearness
   reaches (`scroll_move`'s third value; the components pages, with plain chrome round specimens in their own
   materials, moved only one frame in two before). This needs the scroll area alone in its viewport (a scroll area

@@ -211,9 +211,19 @@ fn scroll_move(prev: &Inputs, cur: &Inputs, mats: &[Material], s: f32) -> (Optio
         let (la, lb) = (a[2] > LATCH, b[2] > LATCH);
         let plain = Some((j, Move { rect, d, frame: d, trace, way, latch: 0.0 }));
         if !la && !lb { return plain; }
-        // The materials drawn in the viewport: the page's (its ground) and those of what lies over it or
-        // reaches into it, in either frame; one used only elsewhere on the page holds no row here.
-        let mut vm = vec![cur.look.material];
+        // The viewport's ground: the page's material, or the override of an opaque shape that lies under
+        // all of it in both frames (a page drawn in plain over a dotted look: its ground shows nowhere).
+        let under = |f: &Inputs| f.instances.iter().filter(|i| {
+            let (b, k) = (i.rect, SPREAD as f32 + 2.0 + i.uv[0].max(0.0));
+            let g = meet(grow(v, k), [0.0, 0.0, w, h]);
+            let covers = |c: Bx| c[0] <= g[0] && c[1] <= g[1] && c[2] >= g[2] && c[3] >= g[3];
+            i.paint[3] == SHAPE && i.paint[2] >= 1.0 && i.look[0] >= 127.5 && i.xf == [0.0; 4] && i.extra[2] == 0.0
+                && covers([b[0], b[1], b[0] + b[2], b[1] + b[3]]) && (is_empty(i.clip) || covers(i.clip))
+        }).map(|i| i.look[0]).fold(None, |a: Option<f32>, c| Some(a.map_or(c, |a| a.max(c))));
+        let base = match (under(prev), under(cur)) { (Some(a), Some(b)) if a == b => Material::from_id((b.round() as u32 % 16) as u8), _ => cur.look.material };
+        // The materials drawn in the viewport: its ground and those of what lies over it or reaches into
+        // it, in either frame; one used only elsewhere on the page holds no row here.
+        let mut vm = vec![base];
         for i in prev.instances.iter().chain(&cur.instances) {
             if i.look[0] < 127.5 || is_empty(meet(i.bounds(SPREAD as f32 + 2.0), v)) { continue; }
             let m = Material::from_id((i.look[0].round() as u32 % 16) as u8);
@@ -233,7 +243,7 @@ fn scroll_move(prev: &Inputs, cur: &Inputs, mats: &[Material], s: f32) -> (Optio
         if !alone { return no("latch: not alone"); }
         // The frame moves as the ground's material does; what another lattice (or none) holds is shaded
         // again where it is and where the frame took it.
-        let ground = latch_pitch(cur.look.material, &cur.look, s);
+        let ground = latch_pitch(base, &cur.look, s);
         let most = pitches.iter().copied().fold(0.0, f32::max);
         let differ = |i: &Instance| i.look[0] >= 127.5 && latch_pitch(Material::from_id((i.look[0].round() as u32 % 16) as u8), &cur.look, s) != ground;
         let vb = [v[0], v[1], v[2], v[3]];
