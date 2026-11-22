@@ -90,3 +90,20 @@ fn a_page_with_no_text_is_drawn_the_same_with_it_on_or_off() {
     // No other preset keeps text clear.
     for p in presets() { assert_eq!(p.post.clear_text, p.hash == "glitch", "{}", p.name); }
 }
+
+/// Text the finishing pass's curvature carries off the frame is clipped in the audit; with no bend it is not.
+#[test]
+fn text_bent_off_the_frame_is_clipped() {
+    use amenui::audit::{Kind, Level};
+    let Ok(mut o) = Offscreen::try_new(W, H) else { eprintln!("no GPU adapter here: skipped"); return };
+    fn edge(_: &()) -> El<()> { col().pad(2.0, 2.0).child(text("At the very edge", 15.0, Paint::TEXT).key("edge")) }
+    let mut ui = open(edge, 1.0);
+    let mut look = Driven::look(&ui);
+    let found = |o: &mut Offscreen, ui: &mut Ui<(), ()>, look: &Look| { let px = o.render(ui, look); Driven::audit(ui, o, look, &px) };
+    let flat = found(&mut o, &mut ui, &look);
+    assert!(!flat.iter().any(|f| f.kind == Kind::Clipped), "no bend, nothing clipped: {flat:?}");
+    look.post.curvature.amount = -0.06;
+    let bent = found(&mut o, &mut ui, &look);
+    let c = bent.iter().find(|f| f.kind == Kind::Clipped && f.key == "edge").unwrap_or_else(|| panic!("bent off the frame is clipped: {bent:?}"));
+    assert!(matches!(c.level, Level::P0 | Level::P1), "{c:?}");
+}

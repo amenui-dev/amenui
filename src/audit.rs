@@ -299,19 +299,56 @@ fn line_contrast<S, M: Clone>(ui: &Ui<S, M>, px: &[u8], ground: &[u8]) -> Vec<(u
 /// shows what was at `ctr + d (1 + bend |d|²) half`, `d = (q − ctr) / half`.
 pub fn unbend(px: &[u8], (w, h): (u32, u32), bend: f32) -> Vec<u8> {
     if bend == 0.0 || px.len() < (w * h * 4) as usize { return px.to_vec(); }
-    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
-    let half = (cx * cx + cy * cy).sqrt();
     let mut out = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
         for x in 0..w {
-            let (dx, dy) = ((x as f32 + 0.5 - cx) / half, (y as f32 + 0.5 - cy) / half);
-            // The drawn point whose bend lands here: d_q (1 + bend |d_q|²) = d, by a few fixed-point steps.
-            let (mut qx, mut qy) = (dx, dy);
-            for _ in 0..6 { let k = 1.0 + bend * (qx * qx + qy * qy); (qx, qy) = (dx / k, dy / k); }
-            let (sx, sy) = ((cx + qx * half).floor(), (cy + qy * half).floor());
+            let (sx, sy) = bent_at((x as f32 + 0.5, y as f32 + 0.5), (w, h), bend);
+            let (sx, sy) = (sx.floor(), sy.floor());
+            // What the bend carries off the frame is not drawn: it stays empty here (`bent_off` reports it).
             if sx < 0.0 || sy < 0.0 || sx >= w as f32 || sy >= h as f32 { continue; }
             let (o, i) = (((y * w + x) * 4) as usize, ((sy as u32 * w + sx as u32) * 4) as usize);
             out[o..o + 4].copy_from_slice(&px[i..i + 4]);
+        }
+    }
+    out
+}
+/// Where the bend (`fs_post`'s, `bend`) draws the point `p` that layout put there (device px): the drawn
+/// point `q` whose sample lands on it, `d_q (1 + bend |d_q|²) = d`, by a few fixed-point steps.
+fn bent_at((x, y): (f32, f32), (w, h): (u32, u32), bend: f32) -> (f32, f32) {
+    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
+    let half = (cx * cx + cy * cy).sqrt();
+    let (dx, dy) = ((x - cx) / half, (y - cy) / half);
+    let (mut qx, mut qy) = (dx, dy);
+    for _ in 0..6 { let k = 1.0 + bend * (qx * qx + qy * qy); (qx, qy) = (dx / k, dy / k); }
+    (cx + qx * half, cy + qy * half)
+}
+/// Text to read that the finishing pass's curvature (`bend`) carries past the window's edge, which is then
+/// not drawn: P0 when a glyph is wholly off the frame, P1 when some of its ink is past the edge by more
+/// than half a pixel. Text already `Clipped` where layout put it is reported there, not again.
+pub fn bent_off<S, M: Clone>(ui: &Ui<S, M>, bend: f32) -> Vec<Finding> {
+    let mut out = vec![];
+    if bend == 0.0 { return out; }
+    let (dw, dh) = ui.device_size();
+    let s = ui.scale();
+    let glyphs = ui.glyphs();
+    for i in reading(ui) {
+        let (mut whole, mut most) = (0usize, 0.0f32);
+        for g in glyphs.log.iter().filter(|g| g.node == i) {
+            let Some(inst) = ui.scene().instances.get(g.inst) else { continue };
+            if inst.paint[2] < 0.05 { continue; }
+            let b = ink_box(inst);
+            if b[2] <= b[0] || b[3] <= b[1] { continue; }
+            let past = |(x, y): (f32, f32)| (-x).max(-y).max(x - dw as f32).max(y - dh as f32).max(0.0);
+            let corners = [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])].map(|c| past(bent_at(c, (dw, dh), bend)));
+            if corners.iter().all(|&c| c > 0.0) { whole += 1; }
+            most = corners.iter().copied().fold(most, f32::max);
+        }
+        let key = ui.nodes()[i].key.clone();
+        let fix = |what: String| format!("{what}: the finishing pass's curvature ({bend}) bends it off the frame; give it room toward the middle, or bend less");
+        if whole > 0 {
+            out.push(Finding { level: Level::P0, key, kind: Kind::Clipped, measured: whole as f32, limit: 0.0, fix: fix(format!("{whole} glyph(s) bent past the window's edge")) });
+        } else if most > 0.5 {
+            out.push(Finding { level: Level::P1, key, kind: Kind::Clipped, measured: most / s, limit: 0.0, fix: fix(format!("bent {:.0} px past the window's edge", most / s)) });
         }
     }
     out
@@ -630,6 +667,13 @@ fn measure<S, M: Clone>(ui: &mut Ui<S, M>, theme: &crate::style::Theme, by: &str
 
 #[cfg(test)]
 mod tests {
+    /// With no bend the frame read back is the frame, byte for byte.
+    #[test]
+    fn unbend_with_no_bend_is_the_frame_itself() {
+        let (w, h) = (37u32, 23u32);
+        let px: Vec<u8> = (0..w * h * 4).map(|i| (i * 7 % 251) as u8).collect();
+        assert_eq!(super::unbend(&px, (w, h), 0.0), px);
+    }
     /// A frame bent as `fs_post` bends it (nearest), read back by `unbend`, has its marks where layout
     /// put them, near the corners too.
     #[test]
@@ -655,6 +699,8 @@ mod tests {
             assert!(lit(&bent, m) < 16 || m == (118, 78), "the bend moves the mark at {m:?}");
             assert!(lit(&back, m) >= 14, "the mark at {m:?} is back: {} of 16", lit(&back, m));
         }
-        assert_eq!(super::unbend(&flat, (w, h), 0.0), flat, "no bend, the same frame");
+        // A bend that pushes outward carries the corners off the frame: there the frame read back is empty.
+        let out = super::unbend(&flat, (w, h), -0.03);
+        assert_eq!(&out[..4], &[0, 0, 0, 0], "the corner bent off the frame is not drawn back in");
     }
 }

@@ -207,11 +207,16 @@ fn audit_ui<S, M: Clone>(ui: &mut Ui<S, M>, o: &mut Offscreen, look: &Look, px: 
     (o.r.partial, o.r.hide_glyphs) = (partial, hide);
     ui.invalidate();
     // Text bent by the finishing pass is measured where the bend drew it.
+    // With no bend the frames are measured as drawn (`unbend` gives them back unchanged).
     let bend = if look.post.active() { look.post.curvature.amount } else { 0.0 };
     let size = ui.device_size();
     let (px, ground) = (&crate::audit::unbend(px, size, bend)[..], crate::audit::unbend(&ground, size, bend));
     let plain = plain.map(|(p, pg)| (crate::audit::unbend(&p, size, bend), crate::audit::unbend(&pg, size, bend)));
     let mut f = match preset { Some(p) => crate::audit::audit_under(ui, px, &ground, &look.theme, &p.name, &p.rules), None => crate::audit::audit(ui, px, &ground) };
+    // Text the bend carries off the frame is clipped too (where layout has not clipped it already).
+    for b in crate::audit::bent_off(ui, bend) {
+        if !f.iter().any(|d| d.key == b.key && d.kind == crate::audit::Kind::Clipped) { f.push(b); }
+    }
     if let Some((p, pg)) = &plain { f.extend(crate::audit::eroded(ui, (px, &ground), (p, pg), look.material.name())); }
     crate::audit::sort(&mut f);
     f

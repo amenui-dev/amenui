@@ -19,7 +19,8 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 - Under Glitch, text to read is kept clear of the chroma offset and most of the scanlines (`PostSpec::clear_text`,
   off by default): on its ink and 2 px round it the offset is 0 and the scanlines 0.08. Pictures, shapes, the ground
   and `legible(false)` text keep the whole pass. The audit reads a frame bent by curvature where the bend drew it
-  (`audit::unbend`). Breaking: `PostSpec` and `Post` have `clear_text`, `Scene` has `legible`.
+  (`audit::unbend`; with no curvature, the frame as drawn), and reports text the bend carries past the window's
+  edge as `Clipped` (`audit::bent_off`). Breaking: `PostSpec` and `Post` have `clear_text`, `Scene` has `legible`.
 - At rest a card stack's flat cards are on whole pixels (`Stack::fit`, `Stack::scene_in`): each side's outline is
   one pixel at its grey, where the top and right ones had been two at half strength. A 3D element's edge on a pixel
   boundary reads as exactly there (the resolve's zero on a whole step, and distances within a step of a half pixel

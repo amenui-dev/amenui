@@ -2412,7 +2412,10 @@ and the frame is as before.
 
 The audit reads a bent frame (curvature) where the bend drew each pixel back to where layout put it
 (`audit::unbend`, nearest), so text near the corners is measured against its own ink boxes and not the ground
-the bend moved in under them; the softening of the bend stays in what is measured.
+the bend moved in under them; the softening of the bend stays in what is measured. With no curvature the frame
+is measured as drawn, byte for byte. What the bend carries off the frame is not read back in: text to read whose
+ink the bend draws past the window's edge is `Clipped` (`audit::bent_off`; P0 for a glyph wholly off the frame,
+P1 for ink past the edge by more than half a pixel), unless layout has clipped it already.
 
 **Acceptance**: unit tests in `post.rs` (Bayer thresholds are a permutation, 2×2 is the classic 0 2 / 3 1,
 Atkinson-style thresholds lie in 1/8–7/8, palettes, JSON round trips, all off by default); `preset.rs` (recipes
@@ -3183,7 +3186,8 @@ on the same text report once; a looser preset is refused and an older one reads 
 recipes in each preset have no P0 or P1); `tests/clear_text.rs` (under Glitch, inside the ink boxes of text to
 read red and blue are those of the frame with no chroma offset within 1/255, at 1x and 2x, compared flat; text not
 to read keeps its fringe; a page with no text is byte-identical with it on or off; only Glitch has it); a unit test
-that a bent frame unbent has its marks back where they were laid out; `render --page recipe-form --audit
+that a bent frame unbent has its marks back where they were laid out, and with no bend is the frame byte for byte;
+text a bend carries off the frame is `Clipped` (`tests/clear_text.rs`); `render --page recipe-form --audit
 --strict` exits 0.
 
 A component's examples are a page too: `render --page component-<name>` lays out `examples/components/<name>.rs`
