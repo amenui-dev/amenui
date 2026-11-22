@@ -136,23 +136,45 @@ pub fn restless(d: &mut dyn crate::drive::Driven, from: f32) -> Option<Finding> 
 
 /// The box that the window and every clipping ancestor that is not a scroll view leave visible
 /// (logical px), and for each side (left, top, right, bottom) the key of the element whose edge it is
-/// (`None`: the window's). Scroll views are left out: what they hide can be scrolled to.
+/// (`None`: the window's). A scroll view's own edges along the way it scrolls are left out: what they
+/// hide can be scrolled to (across, they clip). An edge outside a scroll view (the window's, or a
+/// clipping ancestor's around it) is that much further out on each side as the scroll view can still
+/// carry the text in from there; one inside it moves with the text. A cut is a clip only where no scroll
+/// view can bring that edge's side into view.
 fn hard_clip<S, M: Clone>(ui: &Ui<S, M>, i: usize) -> (Rect, [Option<String>; 4]) {
     let (w, h) = ui.logical_size();
     let nodes = ui.nodes();
-    let (mut e, mut by): ([f32; 4], [Option<String>; 4]) = ([0.0, 0.0, w, h], Default::default());
+    let (mut e, mut by): ([f32; 4], [Option<String>; 4]) = ([f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY], Default::default());
+    // How far the scroll views passed so far can still move the text away from each side.
+    let mut room = [0.0f32; 4];
+    let tighten = |r: [f32; 4], key: Option<&String>, room: &[f32; 4], e: &mut [f32; 4], by: &mut [Option<String>; 4]| {
+        let r = [r[0] - room[0], r[1] - room[1], r[2] + room[2], r[3] + room[3]];
+        for k in 0..4 {
+            let tighter = if k < 2 { r[k] > e[k] } else { r[k] < e[k] };
+            if tighter { e[k] = r[k]; by[k] = key.cloned(); }
+        }
+    };
     let mut a = nodes[i].parent;
     while let Some(p) = a {
         let n = &nodes[p];
-        if n.clips && !n.scroll {
-            let r = [n.rect.x, n.rect.y, n.rect.right(), n.rect.bottom()];
-            for k in 0..4 {
-                let tighter = if k < 2 { r[k] > e[k] } else { r[k] < e[k] };
-                if tighter { e[k] = r[k]; by[k] = Some(n.key.clone()); }
-            }
+        if n.scroll {
+            let off = ui.scroll_offset(&n.key);
+            let max = (n.extent - if n.horizontal { n.rect.w } else { n.rect.h }).max(0.0);
+            // Its own edges along the way it scrolls are where the text is scrolled to, not a clip;
+            // across, they clip.
+            let (start, end) = if n.horizontal { (0, 2) } else { (1, 3) };
+            let mut r = [n.rect.x, n.rect.y, n.rect.right(), n.rect.bottom()];
+            (r[start], r[end]) = (f32::NEG_INFINITY, f32::INFINITY);
+            tighten(r, Some(&n.key), &room, &mut e, &mut by);
+            // Scrolled back, the text moves toward the end; scrolled on, toward the start.
+            room[start] += off;
+            room[end] += (max - off).max(0.0);
+        } else if n.clips {
+            tighten([n.rect.x, n.rect.y, n.rect.right(), n.rect.bottom()], Some(&n.key), &room, &mut e, &mut by);
         }
         a = n.parent;
     }
+    tighten([0.0, 0.0, w, h], None, &room, &mut e, &mut by);
     (Rect::new(e[0], e[1], (e[2] - e[0]).max(0.0), (e[3] - e[1]).max(0.0)), by)
 }
 

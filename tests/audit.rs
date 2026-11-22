@@ -5,7 +5,7 @@
 use amenui::audit::{Finding, Kind, Level};
 use amenui::drive::{Driven, RenderSpec, audit, audit_with};
 use amenui::offscreen::Offscreen;
-use amenui::el::{El, Paint, col, layers, space, text};
+use amenui::el::{El, Paint, col, layers, row, space, text};
 use amenui::error::LookError;
 use amenui::ui::Ui;
 
@@ -30,6 +30,21 @@ fn moving_on_purpose(t: &f32) -> El<()> { col().pad(20.0, 20.0).child(space(60.0
 fn boxed(_: &()) -> El<()> {
     col().pad(20.0, 20.0).child(col().key("box").width(200.0).clip().child(text("this line is longer than the box that clips it", 18.0, Paint::TEXT).nowrap().key("boxed")))
 }
+/// A last line the window's bottom edge cuts in a page that scrolls (it is a scroll away), and the same
+/// line cut by a box in the page that does not scroll.
+fn scrolled(_: &()) -> El<()> {
+    col().key("page").scroll().height(H as f32).pad(20.0, 20.0).gap(8.0).child(space(10.0, 200.0)).child(text("the last line, a scroll away", 18.0, Paint::TEXT).key("last"))
+}
+fn scrolled_boxed(_: &()) -> El<()> {
+    col().key("page").scroll().height(H as f32).pad(20.0, 20.0).child(col().key("frame").height(222.0).clip().gap(8.0).child(space(10.0, 200.0)).child(text("the last line, cut by its frame", 18.0, Paint::TEXT).key("last")))
+}
+/// A line in a strip that scrolls sideways, running past the window's right edge, and cut across by the
+/// strip's own height.
+fn strip(_: &()) -> El<()> {
+    col().pad(0.0, 20.0).gap(8.0)
+        .child(row().key("strip").scroll_x().width(W as f32).child(text("members of the strip, one after another, far past the window's right edge", 18.0, Paint::TEXT).nowrap().key("members")))
+        .child(row().key("short").scroll_x().width(W as f32).height(10.0).child(text("cut across by its strip", 18.0, Paint::TEXT).nowrap().key("across")))
+}
 fn calm(_: &()) -> El<()> { col().pad(20.0, 20.0).gap(8.0).child(text("A calm page", 22.0, Paint::INK).key("title")).child(text("Everything on it reads.", 15.0, Paint::DIM).key("note")) }
 
 fn broken(page: &str, faces: Vec<amenui::text::Face>, (w, h, s): (u32, u32, f32), _: (Option<amenui::style::Material>, Option<usize>, Option<amenui::i18n::Locale>)) -> Result<Box<dyn Driven>, LookError> {
@@ -42,6 +57,9 @@ fn broken(page: &str, faces: Vec<amenui::text::Face>, (w, h, s): (u32, u32, f32)
         "tiny" => still(tiny),
         "calm" => still(calm),
         "boxed" => still(boxed),
+        "scrolled" => still(scrolled),
+        "scrolled-boxed" => still(scrolled_boxed),
+        "strip" => still(strip),
         "moving" => Box::new(Ui::new(0.0f32, moving, |_, _| {}, faces, w, h, s).on_tick(tick)),
         "moving-on-purpose" => Box::new(Ui::new(0.0f32, moving_on_purpose, |_, _| {}, faces, w, h, s).on_tick(tick)),
         _ => return Err(LookError::UnknownPage { given: page.into(), recipes: String::new() }),
@@ -83,6 +101,24 @@ fn five_broken_pages_each_report_what_is_wrong() {
     for page in ["outside", "grey", "stacked", "tiny", "moving"] {
         for f in findings(page, &mut o) { assert!(!f.fix.is_empty(), "{page}: {f:?}"); }
     }
+}
+
+/// Text the window's edge cuts that a scroll view can bring into view is not clipped, nor text a strip
+/// that scrolls sideways cuts along the way it scrolls; a box in the scroll view that does not scroll
+/// still clips what it cuts, and so does a scroll view across the way it scrolls.
+#[test]
+fn text_a_scroll_away_is_not_clipped_and_a_box_in_the_scroll_still_clips() {
+    let Ok(mut o) = Offscreen::try_new(W, H) else { eprintln!("no GPU adapter here: skipped"); return };
+    let f = findings("scrolled", &mut o);
+    assert!(!f.iter().any(|f| f.kind == Kind::Clipped), "a scroll away: {f:?}");
+    let f = findings("scrolled-boxed", &mut o);
+    let cut = f.iter().find(|f| f.kind == Kind::Clipped && f.key == "last").unwrap_or_else(|| panic!("cut by its frame: {f:?}"));
+    assert!(cut.fix.contains("bottom") && cut.fix.contains("`frame`"), "{}", cut.fix);
+    // Sideways: past the right edge along the strip's scroll is scrolled; across it, clipped by it.
+    let f = findings("strip", &mut o);
+    assert!(!f.iter().any(|f| f.kind == Kind::Clipped && f.key == "members"), "a scroll away sideways: {f:?}");
+    let cut = f.iter().find(|f| f.kind == Kind::Clipped && f.key == "across").unwrap_or_else(|| panic!("cut across its strip: {f:?}"));
+    assert!(cut.fix.contains("`short`"), "{}", cut.fix);
 }
 
 #[test]

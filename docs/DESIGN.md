@@ -3120,7 +3120,7 @@ Everything is measured; each `fix` is one sentence to act on, naming the element
 
 | kind | what is measured | level |
 |---|---|---|
-| `Clipped` | text to read whose ink (`Instance` boxes after poses and turns) is cut by a clip, the window or a reveal; or a word drawn in part | a whole glyph or more, or a word in part: P0; less than a glyph: P1 |
+| `Clipped` | text to read whose ink (`Instance` boxes after poses and turns) is cut by a clip, the window or a reveal; or a word drawn in part. Not what a scroll view can bring into view: a cut is a clip only where no scroll view can bring that edge's side into view. A scroll view's own edges along the way it scrolls do not clip (across, they do); an edge outside a scroll view (the window's, or a clipping box's around it) is as far out as the scroll view can still move the text from it; a box inside it that does not scroll clips as ever | a whole glyph or more, or a word in part: P0; less than a glyph: P1 |
 | `Contrast` | per line of text, the strongest ink pixel against what is drawn under it (WCAG 2) | text to read below 3:1 P0, below 4.5:1 P1; large text to read (a font size of 24 px or more, or 19 px bold: `El::weight` of half a pixel or more, or a face of weight 600 or more) below 3:1 P0 and nothing more; a lone mark (no letter or digit, such as › or −) below 3:1 P1; text not to read below 3:1 P3 |
 | `Overlap` | the share of a glyph's ink covered by another drawn glyph, in one element or between two to read | text to read over 10 %: P1; posed text over its `overlap` + 0.05: P2 |
 | `Small` | the drawn height of text to read (size × scale × the pose's vertical scale) | under 9 device px: P1 |

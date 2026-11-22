@@ -21,6 +21,10 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
   and `legible(false)` text keep the whole pass. The audit reads a frame bent by curvature where the bend drew it
   (`audit::unbend`; with no curvature, the frame as drawn), and reports text the bend carries past the window's
   edge as `Clipped` (`audit::bent_off`). Breaking: `PostSpec` and `Post` have `clear_text`, `Scene` has `legible`.
+- The audit reports a cut as `Clipped` only where no scroll view can bring that edge's side into view: not the last
+  row of a page that scrolls, cut by the window's bottom edge (the fold), nor a line in a strip that scrolls sideways
+  cut by the strip's end or the window's. A box in the scroll view that does not scroll still clips what it cuts, and
+  a scroll view clips across the way it scrolls.
 - The audit tells large text by its size (`audit::LARGE_PX` 24, `LARGE_BOLD_PX` 19 when bold): it needs 3:1, a P0
   under it, and a preset's contrast rules do not apply to it. A 64 px headline at 3.28:1 passes.
 - At rest a card stack's flat cards are on whole device pixels however large the box is drawn (a page's `El::fit`
