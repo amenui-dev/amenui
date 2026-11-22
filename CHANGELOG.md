@@ -10,6 +10,10 @@ in Cargo.toml); raising it is a breaking change before 1.0 only in the second nu
 
 ## Faster scrolling, no late stalls
 
+- The reduced grid (stages at their own scale, a quality below 1) is fixed to the content of the largest scroll area,
+  and the filter up weighs its texels itself: a stage a scroll carries is no longer shaded again in every moved
+  frame. The reduced target is three texels larger each way.
+
 - While the trace holds the rows, the frame moves as the viewport's ground does: an opaque shape with a material
   override under the whole viewport (a plain page over a dotted look, as the components pages are) is that ground.
   Their plain content had been shaded again over the whole viewport every frame as another lattice.

@@ -2200,9 +2200,9 @@ copied whole to the target each frame (the web swap chain gives a new image ever
   inside it that does not scroll itself, such as a strip of chips in a card, is content it carries, shaded again
   where it was and where it is; it had drawn every such frame whole), a step of
   whole device px and no held offset half way between two rows, and the boxes grow by the largest pitch. With a reduced pass for what is loose the frame is drawn whole. With one for the stages alone (§1.35)
-  the frame moves and the trace is shaded at full resolution as without it; the reduced grid stays with the
-  window, so every stage in the viewport that moved is shaded again where it is (its box among the shade boxes,
-  in the reduced pass and the filter up), slow scroll or fast (a list with stages at 0.75 under plain, dottr and
+  the frame moves and the trace is shaded at full resolution as without it; the reduced grid is fixed to the
+  content (§1.35), so a stage the frame carried stands, and while the trace shows every stage in the viewport is
+  shaded again where it is (its box among the shade boxes, in the reduced pass and the filter up) (a list with stages at 0.75 under plain, dottr and
   charr, scrolled fast down and up, is byte for byte the frame drawn whole). Acceptance: `tests/scroll_move.rs` (a slow scroll down
   and back up under four materials at two scales is byte for byte the frame drawn whole at every step, with the
   material shading under half of a small window; a fast scroll down, up and settling under six materials at two
@@ -3320,7 +3320,17 @@ is; the readout's look line shows it too.
 
 The renderer draws a stage's ink and nearness at the device's scale as everything else, and shades its
 pixels in the reduced material pass at the stage's scale, filtered up into the frame; a pixel whose reduced
-neighbours are not all the stage's is shaded at the device's scale, so the stage's edge is sharp. What is
+neighbours are not all the stage's is shaded at the device's scale, so the stage's edge is sharp. The reduced
+grid is fixed to the content of the largest scroll area: its texels' centres are at `(i + n0 + ½) / q` device px
+less the area's offset modulo `GRID_WRAP` = 1536 px (a whole number of texels at every scale, 2/3, 3/8, 1/2 and
+3/4 of the device's), on 1/256 px, and the filter up weighs its four texels itself (`textureLoad`) by where the
+pixel is among their centres. So a stage the scroll carried by whole device px is, pixel for pixel, the stage
+shaded where it is, and a moved frame keeps it. A stage is shaded again where the grid moved under it: every one
+when the grid moved otherwise than the frame (a scroll that did not move the last frame, another largest scroll
+area, a wrap), with the move those outside the moved scroll area (their content stayed, the grid did not) and,
+while the trace shows, those in it too (the content held to a lattice moves otherwise than the grid). On the
+website's Lab, slow scrolling at 0.375, the stages had been shaded again in every moved frame (39% of the window
+on average); now 2% in 12 frames of 40 (a stage outside the list), and the frame shades 7% instead of 44%. What is
 drawn after a stage within its box (the modal layer, menus, popovers, tooltips, the readout, a caption laid
 over it) is shaded at the device's scale: the renderer keeps up to 16 boxes over the stages for it, each
 what it touches merged. Up to 16 stages are shaded at their scale; more are at the device's. A stage held

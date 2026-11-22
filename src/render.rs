@@ -72,7 +72,13 @@ struct Uniforms {
     mv: [f32; 4],
     /// The theme's greys, ground to ink (rgb and the tone each is at), then the extreme (`greys`).
     greys: [[f32; 4]; 5],
+    /// Where the reduced grid is (DESIGN.md §1.35): the anchor's offset (device px, modulo `GRID_WRAP`) and
+    /// the reduced texel the grid starts one before.
+    lop: [f32; 4],
 }
+/// The reduced grid's anchor offset is taken modulo this (device px): a whole number of texels at every
+/// reduced scale (2/3, 3/8, 1/2, 3/4 of the device's), so wrapping moves the grid by whole texels.
+const GRID_WRAP: f32 = 1536.0;
 /// How many stages are drawn at their own scale at most (the others at the device's), and how many boxes
 /// over them are kept at the device's.
 const STAGES: usize = 16;
@@ -303,6 +309,10 @@ pub struct Renderer {
     /// of the last frame (a share of the device's).
     stage_u: Box<StageU>,
     stage_q: f32,
+    /// The reduced grid's place (`U::lop`), and the scroll area it is anchored to with its offset (device
+    /// px) when the last frame was drawn.
+    lop: [f32; 4],
+    anchor: Option<(usize, [f32; 4], [f32; 2])>,
     /// The last frame softened the scroll areas (the next one that does not is drawn sharp everywhere).
     soft_q: f32,
     /// The stages' scale moves with the machine's frames (`perf::StageScale`; off offscreen, where frames
@@ -572,7 +582,7 @@ impl Renderer {
             device, queue, out_format, layout, ubuf, sampler, atlas, atlas_view, marks, marks_view, palette_view, chars, chars_view,
             before: blank.clone(), blank: blank.clone(), hold: blank.clone(), hold_pipe, holds, hold_cap: 64, hold_n: 0, fmap, fmap_view: fmap_view.clone(), fmap_seen: None, fmap_u: [0.0; 4], split_seen: 0, split: [0.0; 4], last_look: None, marks_ready: false, hide_glyphs: false, atlas_new: true, path: Default::default(), plates_laid: std::cell::Cell::new(0),
             pictures: HashMap::default(), picture_views: HashMap::default(), fresh_pics: vec![], hold_group: None, instances, capacity, pipes, annots, annot_capacity: 256, up_pipe: None, trace_pipe: None, specialise: Some(SPECIALISE_AFTER), spec_force: None, spec: Default::default(), drawn: 0, prime, spec_for: None, run_mats: (0, 0), spec_used: None, shader, pl,
-            ink: blank.clone(), lo: blank.clone(), lo_key: (0, 0, 0), material_up: material.clone(), auto: Default::default(), always_lo: false, stage_u: Box::new(([[0.0; 4]; STAGES], [[0.0; 4]; STAGES], [0.0; 4])), stage_q: 1.0, soft_q: 1.0, govern: true, no_map: false,
+            ink: blank.clone(), lo: blank.clone(), lo_key: (0, 0, 0), material_up: material.clone(), auto: Default::default(), always_lo: false, stage_u: Box::new(([[0.0; 4]; STAGES], [[0.0; 4]; STAGES], [0.0; 4])), stage_q: 1.0, lop: [0.0, 0.0, -1.0, -1.0], anchor: None, soft_q: 1.0, govern: true, no_map: false,
             near: blank, material_first: material.clone(), material, size: (0, 0), tiles, mesh, sim_rows: 0,
             region: crate::dirty::Region::All, parts: None, partial: true, frame_view: blank_view.clone(), alt: [blank_view.clone(), blank_view.clone(), blank_view.clone()], cost: Cost::default(), prev: None, spare: (vec![], vec![]), zero, blit, group: None, group_pipe, had_groups: false, plates: Default::default(), plate_pipes, plate_now: 0.0, plate_fade: [[0.0; 4]; 4], had_plates: 0, plate_inked: [false; 4], plate_mats: [0; 4], gated: Default::default(), plate_drew: [0; 4], plate_fresh: [false; 4], plate_held: Default::default(), plate_moves: [false; 4], was_ageing: false, plate_serial: 0, reduced: false, fade_s: 0.15, sbox: [0.0; 4], own: [[0.0; 4]; crate::draw::OWN_COLOURS], post: None, blit_group: blank_group, warm: None, condense: false, last_region: None, tr: [[0.0; 4]; 9], boxes: [[0.0; 4]; 16], tr_loose: 0.0, t_cont: 0.0,
         };
@@ -1210,7 +1220,9 @@ impl Renderer {
     }
     /// The reduced target for quality `q` (its size), made when the size or quality changes.
     fn lo_for(&mut self, q: f32) -> (u32, u32) {
-        let (w, h) = ((self.size.0 as f32 * q).ceil() as u32, (self.size.1 as f32 * q).ceil() as u32);
+        // A texel before the window and two after it: the grid starts up to two texels before the window's
+        // corner, where its anchor puts it (`U::lop`).
+        let (w, h) = ((self.size.0 as f32 * q).ceil() as u32 + 3, (self.size.1 as f32 * q).ceil() as u32 + 3);
         let key = (w, h, (q * 1000.0) as u32);
         self.ensure_up();
         if key != self.lo_key {
@@ -1445,16 +1457,55 @@ impl Renderer {
         self.soft_q = if soft { q } else { 1.0 };
         ui.soft_drawn(soft);
         let lo = (lo_loose || staged).then(|| { let (w, h) = self.lo_for(ql); [1.0 / ql, ql, w as f32, h as f32] });
+        // The reduced grid is anchored to the content of the largest scroll area (DESIGN.md §1.35): its
+        // texels' centres stay on the same content points while it scrolls, so a stage the frame moved is
+        // the stage shaded where it is, and the moved pixels stand. The offset is taken modulo `GRID_WRAP`.
+        let f = ui.field();
+        let area = |b: [f32; 4]| (b[2] - b[0]).max(0.0) * (b[3] - b[1]).max(0.0);
+        let anchor = (0..8).filter(|&j| area(f.scrolls[j]) > 0.0).max_by(|&a, &b| area(f.scrolls[a]).total_cmp(&area(f.scrolls[b]))).map(|j| (j, f.scrolls[j], [f.scrollo[j][0], f.scrollo[j][1]]));
+        let held = anchor.map_or([0.0; 2], |a| a.2);
+        let wrap = [held[0].rem_euclid(GRID_WRAP), held[1].rem_euclid(GRID_WRAP)];
+        let lop = [wrap[0], wrap[1], (wrap[0] * ql).floor() - 1.0, (wrap[1] * ql).floor() - 1.0];
+        // Where the grid moved with the anchor's content and nothing else: the frame moved by what the
+        // content did, the same scroll area, no wrap.
+        let (was, size) = (self.anchor, self.size);
+        let carried_grid = |m: &crate::dirty::Move| was.is_some_and(|(j, r, o)| anchor.is_some_and(|(k, q, _)| k == j && q == r && m.rect == [r[0].max(0.0).ceil() as u32, r[1].max(0.0).ceil() as u32, r[2].min(size.0 as f32).floor() as u32, r[3].min(size.1 as f32).floor() as u32])
+            && [o[0] - held[0], o[1] - held[1]] == [m.frame[0] as f32, m.frame[1] as f32] && (o[0] - held[0]).abs() < GRID_WRAP * 0.5 && (o[1] - held[1]).abs() < GRID_WRAP * 0.5
+            && (o[0].rem_euclid(GRID_WRAP) - wrap[0]) == o[0] - held[0] && (o[1].rem_euclid(GRID_WRAP) - wrap[1]) == o[1] - held[1]);
+        let grid_moved = lop != self.lop;
+        self.lop = lop;
+        self.anchor = anchor;
         // A move with its trace showing shades the trace at full resolution only (`fs_trace`): with a
         // reduced pass for what is loose the frame is drawn whole. One for the stages alone shades the
         // rest at full resolution as the trace does, and the stages again below.
         if lo_loose && parts.as_ref().and_then(|p| p.moved).is_some_and(|m| m.trace > 0.0) { parts = None; why = "trace with a reduced pass"; }
-        // The reduced grid stays with the window, not the content: a stage shaded at its own scale in a
-        // viewport that moved is shaded again where it is (the reduced pass and the filter up), not moved.
-        // A new stage scale (the governor stepped) shades the stages again, every one, and nothing else.
-        if let Some(p) = parts.as_mut() && let Some(v) = if rescaled { Some([0.0, 0.0, self.size.0 as f32, self.size.1 as f32]) } else { p.moved.filter(|_| staged).map(|m| m.bx()) } {
+        // A stage shaded at its own scale is shaded again where the reduced grid moved under it: every stage
+        // when the grid moved otherwise than with the frame's move (a scroll that did not move the last
+        // frame, another anchor, a wrap); with the move, the stages outside the moved viewport (their content
+        // stayed, the grid did not), and those in it while the trace shows (the content held to a lattice
+        // moves otherwise than the grid). A new stage scale (the governor stepped) shades the stages again,
+        // every one, and nothing else.
+        let screen = [0.0, 0.0, self.size.0 as f32, self.size.1 as f32];
+        if let Some(p) = parts.as_mut() && (rescaled || staged && (grid_moved || p.moved.is_some())) {
+            // What of each stage is shaded again: all of it, what lies in the moved viewport, or all of it
+            // unless it lies wholly inside the moved viewport.
+            enum Again { All, In(crate::dirty::Bx), Outside(crate::dirty::Bx) }
+            let again = match p.moved {
+                _ if rescaled => Again::All,
+                Some(m) if carried_grid(&m) => if m.trace > 0.0 { Again::All } else { Again::Outside(m.bx()) },
+                Some(m) if !grid_moved => Again::In(m.bx()),
+                _ => Again::All,
+            };
             let mut s2 = std::mem::take(&mut p.stage2);
-            for st in &ui.scene().stages { let r = crate::dirty::meet(crate::dirty::grow(st.rect, 2.0), v); if !crate::dirty::is_empty(r) { s2.push(r); crate::dirty::why_add(&mut p.why, if rescaled { "stage scale" } else { "stage moved" }, r); } }
+            for st in &ui.scene().stages {
+                let b = crate::dirty::grow(st.rect, 2.0);
+                let r = match again {
+                    Again::All => crate::dirty::meet(b, screen),
+                    Again::In(v) => crate::dirty::meet(b, v),
+                    Again::Outside(v) => if b[0] >= v[0] && b[1] >= v[1] && b[2] <= v[2] && b[3] <= v[3] { crate::dirty::EMPTY } else { crate::dirty::meet(b, screen) },
+                };
+                if !crate::dirty::is_empty(r) { s2.push(r); crate::dirty::why_add(&mut p.why, if rescaled { "stage scale" } else { "stage moved" }, r); }
+            }
             p.stage2 = crate::dirty::merge(s2, crate::dirty::MAX_SHADE_BOXES);
         }
         // A picture given since the last frame (it was drawn blank, or as it was): drawn again where it is,
@@ -2039,8 +2090,10 @@ impl Renderer {
             // boxes at the reduced scale with a texel more on each side for the filter.
             let scs: Vec<Option<[u32; 4]>> = match &boxes {
                 Some((_, s2)) => s2.iter().filter_map(|&[x, y, sw, sh]| {
-                    let (x0, y0) = (((x as f32 * q).floor() - 2.0).max(0.0), ((y as f32 * q).floor() - 2.0).max(0.0));
-                    let (x1, y1) = ((((x + sw) as f32 * q).ceil() + 2.0).min(lw), (((y + sh) as f32 * q).ceil() + 2.0).min(lh));
+                    // The texel a device px is at (`U::lop`): its centre is at a whole number.
+                    let t = |d: u32, k: usize| (d as f32 + self.lop[k]) * q - self.lop[k + 2] - 0.5;
+                    let (x0, y0) = ((t(x, 0).floor() - 2.0).max(0.0), (t(y, 1).floor() - 2.0).max(0.0));
+                    let (x1, y1) = ((t(x + sw, 0).ceil() + 2.0).min(lw), (t(y + sh, 1).ceil() + 2.0).min(lh));
                     (x1 > x0 && y1 > y0).then_some(Some([x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32]))
                 }).collect(),
                 None => vec![None],
@@ -2115,6 +2168,7 @@ impl Renderer {
             stages: self.stage_u.0, sharp: self.stage_u.1, stagen: self.stage_u.2,
             mv: match self.parts.as_ref().and_then(|p| p.moved) { Some(m) if m.trace > 0.0 => [m.trace, m.way[0], m.way[1], 1.0], _ => [0.0; 4] },
             greys: greys(th),
+            lop: self.lop,
         };
         self.queue.write_buffer(&self.ubuf, 0, bytemuck::bytes_of(&u));
     }

@@ -129,7 +129,7 @@ fn a_fast_scroll_under_glitchr_is_drawn_whole_in_the_viewport() {
 }
 
 /// A list with stages in it, shaded at their own scale (the Lab): a fast scroll with its trace showing
-/// moves the last frame and shades the stages again where they are, and the frame is the frame drawn
+/// moves the last frame and shades the stages again where they are (while the trace shows), and the frame is the frame drawn
 /// whole, byte for byte, the moved one with the passes made for its material (`Renderer::spec_force`).
 #[test]
 fn a_fast_scroll_over_stages_at_their_own_scale_moves_the_last_frame() {
@@ -163,9 +163,10 @@ fn a_fast_scroll_over_stages_at_their_own_scale_moves_the_last_frame() {
             assert_eq!(diff, 0, "{mat:?} frame {f}: {diff} bytes differ from the frame drawn whole ({})", u.perf().path.line());
             assert!(u.perf().path.stage < 1.0, "{mat:?} frame {f}: the stages are at their own scale ({})", u.perf().path.line());
             if part.r.cost.trace > 0 { traced += 1; }
-            // A move shades the stages in the viewport again (the reduced grid stays with the window).
+            // A move with the trace showing shades the stages in the viewport again (the content held to a
+            // lattice moves otherwise than the reduced grid, which follows the content).
             let path = u.perf().path;
-            if path.moved { assert!(path.shade_why.iter().any(|w| w.0 == "stage moved"), "{mat:?} frame {f}: {}", path.line()); }
+            if path.moved && part.r.cost.trace > 0 { assert!(path.shade_why.iter().any(|w| w.0 == "stage moved"), "{mat:?} frame {f}: {}", path.line()); }
         }
         assert_eq!(part.r.specialised(), Some(mat.id()), "{mat:?}: drawn with its own passes");
         assert!(traced >= 8, "{mat:?}: only {traced} of 30 frames moved the last frame with the trace showing ({})", u.perf().path.line());
@@ -574,5 +575,56 @@ fn a_plain_page_over_a_dotted_look_moves_its_frame_with_the_content() {
         }
         assert!(traced >= 6, "specimen {specimen}: only {traced} frames with the trace moved the last frame");
         if specimen { assert!(lattice > 0.0, "the dotted rows are not shaded again") } else { assert_eq!(lattice, 0.0, "plain rows on a plain page are shaded again as another lattice") }
+    }
+}
+
+/// The reduced grid is anchored to the content of the largest scroll area (DESIGN.md §1.35): a slow
+/// scroll over stages at their own scale moves the last frame and shades none of the stages it carried
+/// again (they were shaded again every moved frame, the grid fixed to the window: 39–47% of the Lab's
+/// frames); a stage outside the scroll area (over it, in the bar) is, as the grid moved under it. Each
+/// frame is the frame drawn whole, byte for byte, at every reduced scale.
+#[test]
+fn a_slow_scroll_carries_the_stages_with_the_reduced_grid() {
+    struct Q { mat: Material, q: f32 }
+    fn staged(_: &Q) -> El<()> {
+        let rows = (0..40).fold(col().key("rows").gap(6.0).pad(12.0, 12.0), |c, i| {
+            let c = c.child(text(format!("Row {i}: a line of text to read as it scrolls past"), 14.0, Paint::TEXT));
+            if i % 8 == 3 { c.child(col().key(format!("cell{i}")).stage().width(220.0).height(90.0).fill(Paint::FAINT).child(text(format!("a stage {i}"), 20.0, Paint::INK))) } else { c }
+        });
+        col().key("page").fill_width().fill_height()
+            .child(col().key("bar").stage().height(40.0).fill_width().fill(Paint::FAINT).child(text("a stage over the list", 16.0, Paint::INK)))
+            .child(col().key("list").fill_width().grow(1.0).scroll().child(rows))
+    }
+    let (Ok(mut part), Ok(mut whole)) = (Offscreen::try_new(W * 2, H * 2), Offscreen::try_new(W * 2, H * 2)) else { eprintln!("no GPU adapter here: skipped"); return };
+    whole.r.partial = false;
+    // At scale 2 the stages go to 1.5, 1 and 0.75 (3/4, 1/2 and 3/8 of the device's).
+    for q in [0.75f32, 0.5, 0.375] {
+        for mat in [Material::Plain, Material::Dottr] {
+            let mk = || { let mut u = Ui::new(Q { mat, q }, staged, |_, _| {}, fonts(), W * 2, H * 2, 2.0).on_look(|s| Look { material: s.mat, quality: s.q, ..Look::default() }); u.pointer_leave(); u.tick(5.0); u };
+            let (mut u, mut v) = (mk(), mk());
+            let look = u.look();
+            let _ = part.render(&mut u, &look);
+            let _ = whole.render(&mut v, &look);
+            let mut t = 5.0;
+            let (mut carried, mut bar) = (0, 0);
+            for f in 0..24 {
+                t += 1.0 / 60.0;
+                let dy = if f < 10 { 7.0 } else if f < 20 { -5.0 } else { 0.0 };
+                for ui in [&mut u, &mut v] { if dy != 0.0 { ui.wheel(240.0, 200.0, dy); } ui.tick(t); }
+                let a = part.render(&mut u, &look);
+                let b = whole.render(&mut v, &look);
+                let diff = a.iter().zip(&b).filter(|(p, q)| p != q).count();
+                let path = u.perf().path;
+                assert_eq!(diff, 0, "q {q}, {mat:?} frame {f}: {diff} bytes differ from the frame drawn whole ({})", path.line());
+                assert!(path.stage < 1.0, "q {q}, {mat:?} frame {f}: the stages are at their own scale ({})", path.line());
+                let again = path.shade_why.iter().filter(|w| w.0 == "stage moved").map(|w| w.1).sum::<f32>();
+                if path.moved && dy != 0.0 {
+                    // Only the bar's stage: 40 px of the 360.
+                    assert!(again < 0.15, "q {q}, {mat:?} frame {f}: the carried stages are shaded again ({})", path.line());
+                    if again > 0.0 { bar += 1; } else { carried += 1; }
+                }
+            }
+            assert!(bar >= 10, "q {q}, {mat:?}: the stage outside the list was shaded again in only {bar} moved frames (and {carried} without)");
+        }
     }
 }

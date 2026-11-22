@@ -57,6 +57,7 @@ struct U {
   stagen: vec4f,   // how many stages, how many boxes over them; z 1: the reduced pass is for the stages alone
   mv: vec4f,       // a scroll move with its trace showing: the stronger trace of the two frames, the way it points (render.rs)
   greys: array<vec4f, 5>, // the theme's greys, ground to ink (raised, hairline, dim, text: rgb, w the tone each is at), then the extreme
+  lop: vec4f,      // the reduced grid: its anchor's offset (device px, modulo GRID_WRAP) and the texel it starts one before (render.rs)
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var samp: sampler;
@@ -1752,14 +1753,17 @@ fn dither_t(kind: f32, p: vec2f) -> f32 {
 /// it is 1 / q, so the pixel centre of the small target lands on the full frame's coordinates; a pixel
 /// at rest there is not shaded but marked (alpha 1) for the full-resolution pass to shade, a loose one
 /// is shaded (alpha 0).
+/// Where reduced texel `t` (its centre) is, device px: on a grid fixed to the anchor's content (`u.lop`),
+/// on 1/256 px so that a texel lands on the same point whatever the offset.
+fn lo_at(t: vec2f) -> vec2f { return round((t + u.lop.zw) * u.qual.x * 256.0) / 256.0 - u.lop.xy; }
 @fragment fn fs_material(@builtin(position) frag: vec4f) -> @location(0) vec4f {
-  let p = frag.xy * u.qual.x;
   if (u.qual.x > 1.0) {
+    let p = lo_at(frag.xy);
     // A stage at its own scale is shaded here; elsewhere, when the pass is for the stages alone, nothing is.
     if (!in_stage(p) && !soft_at(p) && (u.stagen.z > 0.5 || rest_at(p))) { return vec4f(0.0, 0.0, 0.0, 1.0); }
     return vec4f(shade(p), 0.0);
   }
-  return vec4f(shade(p), 1.0);
+  return vec4f(shade(frag.xy), 1.0);
 }
 
 /// Whether the scroll trace can show at `pf` in this frame or the last (DESIGN.md §1.19): a scroll move
@@ -1868,8 +1872,16 @@ fn rest_at(p: vec2f) -> bool {
 /// edge of a loose region is sharp); where all four were loose, it takes their filtered colour.
 @fragment fn fs_material_up(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let p = frag.xy;
-  // One filtered read: its alpha is above 0 exactly when a texel with weight here was at rest.
-  let c = textureSampleLevel(lo, samp, p * u.qual.y / u.qual.zw, 0.0);
+  // The four texels round it, weighed by where it is among their centres (`lo_at`): its alpha is above 0
+  // exactly when a texel with weight here was at rest. Read and weighed here, not by the sampler, so the
+  // same content point weighs them the same at any offset.
+  let t = (p + u.lop.xy) * u.qual.y - u.lop.zw - 0.5;
+  let i = floor(t);
+  let w = t - i;
+  let hi = vec2i(u.qual.zw) - 1;
+  let a = clamp(vec2i(i), vec2i(0), hi);
+  let b = clamp(vec2i(i) + 1, vec2i(0), hi);
+  let c = mix(mix(textureLoad(lo, a, 0), textureLoad(lo, vec2i(b.x, a.y), 0), w.x), mix(textureLoad(lo, vec2i(a.x, b.y), 0), textureLoad(lo, b, 0), w.x), w.y);
   if (c.a > 0.001) { return vec4f(shade(p), 1.0); }
   return vec4f(c.rgb, 1.0);
 }
