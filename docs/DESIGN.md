@@ -3324,7 +3324,9 @@ neighbours are not all the stage's is shaded at the device's scale, so the stage
 grid is fixed to the content of the largest scroll area: its texels' centres are at `(i + n0 + ½) / q` device px
 less the area's offset modulo `GRID_WRAP` = 1536 px (a whole number of texels at every scale, 2/3, 3/8, 1/2 and
 3/4 of the device's), on 1/256 px, and the filter up weighs its four texels itself (`textureLoad`) by where the
-pixel is among their centres. So a stage the scroll carried by whole device px is, pixel for pixel, the stage
+pixel is among their centres; against the sampler's filter for the same reduced pass (`Renderer::up_by_sampler`,
+its weights in 8 bits on most GPUs) no channel differs by more than 1/255, at any offset of the grid, and at full
+quality there is no filter up (`tests/scroll_move.rs`). So a stage the scroll carried by whole device px is, pixel for pixel, the stage
 shaded where it is, and a moved frame keeps it. A stage is shaded again where the grid moved under it: every one
 when the grid moved otherwise than the frame (a scroll that did not move the last frame, another largest scroll
 area, a wrap), with the move those outside the moved scroll area (their content stayed, the grid did not) and,

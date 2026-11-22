@@ -81,6 +81,9 @@ override MAT: i32 = -1;
 /// pixel finds its material as the pass for any does, and the pass draws only those of `MAT` (`shade_new`);
 /// the others are drawn by the passes for theirs.
 override ONLY: bool = false;
+/// The filter up done by the sampler (`Renderer::up_by_sampler`): the check that the filter weighing its four
+/// texels itself differs from the sampler's by a step of 8 bits at most.
+override SAMPLED_UP: bool = false;
 /// The material an instance (or a pixel) is drawn with: its override, or the global one.
 fn eff_mat(code: f32) -> i32 { if (MAT >= 0 && !ONLY) { return MAT; } if (code >= 127.5) { return i32(round(code)) % 16; } return i32(u.fd.x); }
 /// The extreme's hue code (`Paint::EXTREME_CODE`: after the theme's three and the drawings' 32).
@@ -1881,7 +1884,8 @@ fn rest_at(p: vec2f) -> bool {
   let hi = vec2i(u.qual.zw) - 1;
   let a = clamp(vec2i(i), vec2i(0), hi);
   let b = clamp(vec2i(i) + 1, vec2i(0), hi);
-  let c = mix(mix(textureLoad(lo, a, 0), textureLoad(lo, vec2i(b.x, a.y), 0), w.x), mix(textureLoad(lo, vec2i(a.x, b.y), 0), textureLoad(lo, b, 0), w.x), w.y);
+  var c = mix(mix(textureLoad(lo, a, 0), textureLoad(lo, vec2i(b.x, a.y), 0), w.x), mix(textureLoad(lo, vec2i(a.x, b.y), 0), textureLoad(lo, b, 0), w.x), w.y);
+  if (SAMPLED_UP) { c = textureSampleLevel(lo, samp, (t + 0.5) / u.qual.zw, 0.0); }
   if (c.a > 0.001) { return vec4f(shade(p), 1.0); }
   return vec4f(c.rgb, 1.0);
 }

@@ -628,3 +628,52 @@ fn a_slow_scroll_carries_the_stages_with_the_reduced_grid() {
         }
     }
 }
+
+/// The filter up from the reduced grid weighs its four texels itself (DESIGN.md §1.35); against the
+/// sampler's filter for the same reduced pass it differs by one step of 8 bits at most in any channel, at
+/// any offset of the grid; at full quality there is no reduced pass and the frames are the same.
+#[test]
+fn the_filter_up_differs_from_the_samplers_by_one_step_at_most() {
+    struct Q { mat: Material, q: f32 }
+    fn staged(_: &Q) -> El<()> {
+        let rows = (0..40).fold(col().key("rows").gap(6.0).pad(12.0, 12.0), |c, i| {
+            let c = c.child(text(format!("Row {i}: a line of text to read as it scrolls past"), 14.0, Paint::TEXT));
+            if i % 8 == 3 { c.child(col().key(format!("cell{i}")).stage().width(220.0).height(90.0).fill(Paint::FAINT).child(text(format!("a stage {i}"), 20.0, Paint::INK))) } else { c }
+        });
+        col().key("page").fill_width().fill_height()
+            .child(col().key("bar").stage().height(40.0).fill_width().fill(Paint::FAINT).child(text("a stage over the list", 16.0, Paint::INK)))
+            .child(col().key("list").fill_width().grow(1.0).scroll().child(rows))
+    }
+    for scale in [1.0f32, 2.0] {
+        let (w, h) = ((W as f32 * scale) as u32, (H as f32 * scale) as u32);
+        let (Ok(mut own), Ok(mut samp)) = (Offscreen::try_new(w, h), Offscreen::try_new(w, h)) else { eprintln!("no GPU adapter here: skipped"); return };
+        for o in [&mut own, &mut samp] { o.r.partial = false; o.r.always_lo = true; }
+        samp.r.up_by_sampler(true);
+        let mut seen = 0;
+        for q in [1.0f32, 0.75, 0.5, 0.375] {
+            for mat in [Material::Plain, Material::Dottr] {
+                let mk = || { let mut u = Ui::new(Q { mat, q }, staged, |_, _| {}, fonts(), w, h, scale).on_look(|s| Look { material: s.mat, quality: s.q, ..Look::default() }); u.pointer_leave(); u.tick(5.0); u };
+                let (mut u, mut v) = (mk(), mk());
+                let look = u.look();
+                let mut t = 5.0;
+                // At rest, then at offsets that put the grid's texels between device px (7 px a step).
+                for f in 0..3 {
+                    if f > 0 { t += 1.0; for ui in [&mut u, &mut v] { ui.wheel(240.0, 200.0, 7.0 * f as f32); ui.tick(t); } }
+                    let a = own.render(&mut u, &look);
+                    let b = samp.render(&mut v, &look);
+                    let most = a.iter().zip(&b).map(|(p, q)| p.abs_diff(*q)).max().unwrap_or(0);
+                    seen = seen.max(most);
+                    let reduced = u.perf().path.reduced;
+                    if q < 1.0 {
+                        assert!(reduced > 0.0, "scale {scale}, q {q}, {mat:?} step {f}: no reduced pass ({})", u.perf().path.line());
+                        assert!(most <= 1, "scale {scale}, q {q}, {mat:?} step {f}: a channel differs by {most}/255 from the sampler's filter");
+                    } else {
+                        assert_eq!(most, 0, "scale {scale}, {mat:?} step {f}: at full quality a channel differs by {most}/255");
+                    }
+                }
+            }
+        }
+        // 1 on lavapipe (8-bit weights in the sampler); a GPU that weighs in floats may differ by none.
+        eprintln!("scale {scale}: a channel differs from the sampler's filter by {seen}/255 at most");
+    }
+}

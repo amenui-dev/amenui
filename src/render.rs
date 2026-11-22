@@ -256,6 +256,8 @@ pub struct Renderer {
     /// The upsample after a reduced material pass: made the first time a quality below 1 is used (it holds
     /// the whole material again, and compiling it at start-up is slow on a CPU rasteriser).
     up_pipe: Option<wgpu::RenderPipeline>,
+    /// The filter up by the sampler, for a check (`up_by_sampler`).
+    up_sampled: Option<wgpu::RenderPipeline>,
     /// The pass over a scroll move with its trace showing (`fs_trace`): made when first needed.
     trace_pipe: Option<wgpu::RenderPipeline>,
     /// After how many frames drawn the material passes for the page's materials are made, one a frame
@@ -581,7 +583,7 @@ impl Renderer {
         let mut r = Self {
             device, queue, out_format, layout, ubuf, sampler, atlas, atlas_view, marks, marks_view, palette_view, chars, chars_view,
             before: blank.clone(), blank: blank.clone(), hold: blank.clone(), hold_pipe, holds, hold_cap: 64, hold_n: 0, fmap, fmap_view: fmap_view.clone(), fmap_seen: None, fmap_u: [0.0; 4], split_seen: 0, split: [0.0; 4], last_look: None, marks_ready: false, hide_glyphs: false, atlas_new: true, path: Default::default(), plates_laid: std::cell::Cell::new(0),
-            pictures: HashMap::default(), picture_views: HashMap::default(), fresh_pics: vec![], hold_group: None, instances, capacity, pipes, annots, annot_capacity: 256, up_pipe: None, trace_pipe: None, specialise: Some(SPECIALISE_AFTER), spec_force: None, spec: Default::default(), drawn: 0, prime, spec_for: None, run_mats: (0, 0), spec_used: None, shader, pl,
+            pictures: HashMap::default(), picture_views: HashMap::default(), fresh_pics: vec![], hold_group: None, instances, capacity, pipes, annots, annot_capacity: 256, up_pipe: None, up_sampled: None, trace_pipe: None, specialise: Some(SPECIALISE_AFTER), spec_force: None, spec: Default::default(), drawn: 0, prime, spec_for: None, run_mats: (0, 0), spec_used: None, shader, pl,
             ink: blank.clone(), lo: blank.clone(), lo_key: (0, 0, 0), material_up: material.clone(), auto: Default::default(), always_lo: false, stage_u: Box::new(([[0.0; 4]; STAGES], [[0.0; 4]; STAGES], [0.0; 4])), stage_q: 1.0, lop: [0.0, 0.0, -1.0, -1.0], anchor: None, soft_q: 1.0, govern: true, no_map: false,
             near: blank, material_first: material.clone(), material, size: (0, 0), tiles, mesh, sim_rows: 0,
             region: crate::dirty::Region::All, parts: None, partial: true, frame_view: blank_view.clone(), alt: [blank_view.clone(), blank_view.clone(), blank_view.clone()], cost: Cost::default(), prev: None, spare: (vec![], vec![]), zero, blit, group: None, group_pipe, had_groups: false, plates: Default::default(), plate_pipes, plate_now: 0.0, plate_fade: [[0.0; 4]; 4], had_plates: 0, plate_inked: [false; 4], plate_mats: [0; 4], gated: Default::default(), plate_drew: [0; 4], plate_fresh: [false; 4], plate_held: Default::default(), plate_moves: [false; 4], was_ageing: false, plate_serial: 0, reduced: false, fade_s: 0.15, sbox: [0.0; 4], own: [[0.0; 4]; crate::draw::OWN_COLOURS], post: None, blit_group: blank_group, warm: None, condense: false, last_region: None, tr: [[0.0; 4]; 9], boxes: [[0.0; 4]; 16], tr_loose: 0.0, t_cont: 0.0,
@@ -1096,6 +1098,23 @@ impl Renderer {
         let p = self.material_pipe("fs_material_up", None);
         self.prime(&p);
         self.up_pipe = Some(p);
+    }
+    /// The filter up from the reduced pass done by the sampler (its weights in 8 bits on most GPUs), not by
+    /// the shader weighing its four texels: for the check that the two differ by a step of 8 bits at most
+    /// (DESIGN.md §1.35). Every reduced pass then draws with the pass for any material.
+    #[doc(hidden)]
+    pub fn up_by_sampler(&mut self, on: bool) {
+        self.up_sampled = on.then(|| {
+            let fragment = wgpu::PipelineCompilationOptions { constants: &[("SAMPLED_UP", 1.0)], ..Default::default() };
+            self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("fs_material_up sampled"), layout: Some(&self.pl),
+                vertex: wgpu::VertexState { module: &self.shader, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+                depth_stencil: None, multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState { module: &self.shader, entry_point: Some("fs_material_up"), compilation_options: fragment, targets: &[Some(wgpu::ColorTargetState { format: self.out_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+                multiview_mask: None, cache: None,
+            })
+        });
     }
     /// A full-screen material pass, `fs_material` or `fs_material_up`, for any material or for `mat` alone.
     fn material_pipe(&self, fs: &str, mat: Option<u8>) -> wgpu::RenderPipeline { self.material_pipe_only(fs, mat, false) }
@@ -2008,6 +2027,7 @@ impl Renderer {
                 spec.and_then(|s| s.2.clone()).into_iter().collect(),
             ),
         };
+        let up_pipes = match &self.up_sampled { Some(p) => vec![p.clone()], None => up_pipes };
         let used = spec.map(|_| mat);
         self.spec_used = used;
         self.path.specialised = used;
